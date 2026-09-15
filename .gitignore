@@ -1,0 +1,26 @@
+# Python / Django
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.env
+*.sqlite3
+server/media/
+server/staticfiles/
+.pytest_cache/
+.ruff_cache/
+
+# HarmonyOS
+oh_modules/
+.hvigor/
+.cxx/
+build/
+*.har
+*.hap
+local.properties
+
+# 系统与日志
+.DS_Store
+smoke.log
+*.log
