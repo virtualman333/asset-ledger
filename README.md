@@ -2,6 +2,8 @@
 
 股息视角的多市场投资资产记录。**原生鸿蒙（ArkTS）客户端 + Django 后端 + MySQL**，支持 A 股 / 港股 / 美股 / 基金 / 外汇 / 数字货币。
 
+仓库：https://github.com/virtualman333/asset-ledger
+
 ## 它解决什么
 
 - 手动记账太烦 —— 券商截图、成交短信直接丢给 Agent，识别成草稿，一键确认入账
