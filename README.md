@@ -17,6 +17,24 @@
 2. **流水是唯一事实源。** 持仓、成本、盈亏、股息全部由流水推导，不存第二份真相。
 3. **原始凭证永不硬删。** 每笔 Agent 入账的流水都能回溯到截图与识别原文。
 
+### 股息口径（只有一个）
+
+股息有两条合法录入路径，最容易变成「同一笔钱算两遍」或「两个页面数字不一样」：
+
+| 录入方式 | 落库 | 金额口径 |
+| --- | --- | --- |
+| `POST /transactions/dividends/` | 股息明细（DividendRecord） | 税后净额 `net` |
+| `POST /transactions/records/` side=DIVIDEND | 一条 DIVIDEND 流水 | 现金变动 |
+| 两者都落并互相关联 | 明细挂在流水之上 | `docs/DESIGN.md` §3 的形态 |
+
+归集规则写在 **`server/apps/analytics/dividend_income.py`（唯一定义处）**：
+
+1. 每条股息明细计一次，金额取 `net`；它关联的那条流水标记为「已被明细代表」。
+2. 没有被任何明细代表的 DIVIDEND 流水计一次，金额取 `abs(amount)`。
+3. 所以第三种形态不会重复计，前两种都算数。
+
+持仓明细、总览统计、股息月度分布三处**都调用这份归集**，任何一处都不许自己再算一遍。
+
 ## 技术栈
 
 | 层 | 选型 |
@@ -63,8 +81,17 @@ python manage.py runserver 0.0.0.0:8000
 
 ```bash
 python scripts/smoke_api.py             # 覆盖注册→记账→行情→统计→Agent 识别→入账
-python scripts/smoke_record_flow.py     # 覆盖鸿蒙「记一笔」页：标的自动建→买卖→股息→出入金→持仓推导
+python scripts/smoke_record_flow.py     # 覆盖鸿蒙「记一笔」页：标的自动建→买卖→股息→出入金→持仓推导→股息口径一致
 ```
+
+单元测试（纯 Python，**不需要数据库、不需要 Django**）：
+
+```bash
+cd server
+python -m unittest discover -s apps/analytics/tests -t .
+```
+
+股息口径的归集规则（`apps/analytics/dividend_income.py`）刻意不 import django，就是为了让这条最影响账目、又最容易写错的规则能被秒级验证。
 
 演示账号：`demo / demo12345`
 
@@ -93,6 +120,18 @@ POST /api/v1/ingest/drafts/{id}/confirm|discard    确认入账 / 丢弃
 GET  /api/v1/analytics/positions|summary|dividends|calendar
 ```
 
+`analytics/summary/` 里的收益口径：
+
+| 字段 | 含义 |
+| --- | --- |
+| `dividend_total` | 累计股息（所有已录入的股息，不分年份） |
+| `dividend_annual` | 近 365 天股息 —— 用滚动一年而不是自然年，免得 12 月建的账本次年 1 月显示成 0 |
+| `dividend_yield` | 股息率 = `dividend_annual` ÷ 持仓成本；**成本为 0（已清仓）时是 `null` 而不是 0** |
+| `monthly_passive_income` | 月度被动收入 = `dividend_annual` ÷ 12 |
+| `annualized` | XIRR 年化。出入金与**收到的股息现金**都算现金流（股息不体现在市值里，漏掉会把年化算低） |
+
+`analytics/positions/` 每一行也带 `dividend_total` / `annual_dividend` / `dividend_yield`。
+
 ## 路线图
 
 - [x] M0 骨架：MySQL 建库、后端骨架、鸿蒙工程、GitHub 仓库
@@ -105,5 +144,6 @@ GET  /api/v1/analytics/positions|summary|dividends|calendar
 ## 已知约束
 
 - 鸿蒙端目前只做文本凭证提交，截图上传接口后端已就绪，端上接入在 M5
+- **股息率与月度被动收入后端已提供**（`analytics/summary/`），鸿蒙统计页尚未展示，端上接入在 M5
 - 美股行情延迟约 15 分钟（腾讯/Yahoo 免费源），需要实时行情请接付费源
 - 股息数据以手动录入与 Agent 识别为主，自动股息日历仍在 TODO

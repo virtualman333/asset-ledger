@@ -8,9 +8,21 @@ from decimal import Decimal
 from django.conf import settings
 from django.utils import timezone
 
+from apps.accounts.models import Account
+from apps.assets.models import Asset
 from apps.market.models import FxRate, PriceQuote
 from apps.market.services import fetch_fx
 from apps.transactions.models import DividendRecord, Transaction
+
+from .dividend_income import (
+    ANNUAL_WINDOW_DAYS,
+    collect_dividends,
+    dividend_yield,
+    group_by_position,
+    monthly_passive_income,
+    sum_by_currency,
+    within_window,
+)
 
 ZERO = Decimal("0")
 
@@ -41,6 +53,41 @@ def get_rate(currency: str, base: str | None = None) -> Decimal:
 def latest_price(asset_id: int) -> Decimal | None:
     row = PriceQuote.objects.filter(asset_id=asset_id).order_by("-fetched_at").first()
     return row.price if row else None
+
+
+def dividend_entries(user) -> list:
+    """股息归集（唯一口径），持仓与统计两处共用。
+
+    归集规则本身写在 ``dividend_income.collect_dividends`` 里，本函数只负责把
+    ORM 数据摘成纯 dict —— 这样规则可以被单测覆盖，不需要数据库。
+    """
+    records = [
+        {
+            "asset_id": row.asset_id,
+            "account_id": row.account_id,
+            "net": row.net,
+            "currency": row.currency,
+            "pay_date": row.pay_date,
+            "transaction_id": row.transaction_id,
+        }
+        for row in DividendRecord.objects.filter(user=user).only(
+            "asset_id", "account_id", "net", "currency", "pay_date", "transaction_id"
+        )
+    ]
+    dividend_txs = [
+        {
+            "id": row.id,
+            "asset_id": row.asset_id,
+            "account_id": row.account_id,
+            "amount": row.amount,
+            "currency": row.currency,
+            "traded_at": row.traded_at,
+        }
+        for row in Transaction.objects.filter(user=user, side="DIVIDEND").only(
+            "id", "asset_id", "account_id", "amount", "currency", "traded_at"
+        )
+    ]
+    return collect_dividends(records, dividend_txs)
 
 
 def build_positions(user) -> list[dict]:
@@ -88,10 +135,38 @@ def build_positions(user) -> list[dict]:
             if bucket["quantity"] <= 0:
                 bucket["quantity"] = ZERO
                 bucket["cost_basis"] = ZERO
-        elif tx.side == "DIVIDEND":
-            bucket["dividend_total"] += abs(tx.amount)
         elif tx.side == "SPLIT":
             bucket["quantity"] += qty
+        # DIVIDEND 流水在这里只负责「把这一格建出来」，金额统一由股息归集函数给，
+        # 否则「只有股息明细、没有股息流水」的标的一行都不会出现。
+
+    entries = dividend_entries(user)
+    dividend_map = group_by_position(entries)
+    annual_map = group_by_position(within_window(entries, timezone.localdate(), ANNUAL_WINDOW_DAYS))
+
+    for key in dividend_map:
+        if key in buckets:
+            continue
+        account_id, asset_id = key
+        sample = next(e for e in entries if e.position_key == key)
+        asset = Asset.objects.filter(pk=asset_id).first() if asset_id else None
+        account = Account.objects.filter(pk=account_id).first() if account_id else None
+        buckets[key] = {
+            "account_id": account_id,
+            "account_name": account.name if account else "",
+            "asset_id": asset_id,
+            "symbol": asset.symbol if asset else "",
+            "name": asset.name if asset else "",
+            "market": asset.market if asset else "",
+            "currency": sample.currency or (account.currency if account else ""),
+            "quantity": ZERO,
+            "cost_basis": ZERO,
+            "realized_pnl": ZERO,
+            "dividend_total": ZERO,
+        }
+
+    for key, bucket in buckets.items():
+        bucket["dividend_total"] = dividend_map.get(key, ZERO)
 
     positions = []
     for bucket in buckets.values():
@@ -102,6 +177,8 @@ def build_positions(user) -> list[dict]:
         price = latest_price(bucket["asset_id"]) if bucket["asset_id"] else None
         market_value = (price * qty) if (price and qty) else None
         unrealized = (market_value - bucket["cost_basis"]) if market_value is not None else None
+        annual = annual_map.get((bucket["account_id"], bucket["asset_id"]), ZERO)
+        position_yield = dividend_yield(annual, bucket["cost_basis"])
         positions.append(
             {
                 **bucket,
@@ -110,6 +187,8 @@ def build_positions(user) -> list[dict]:
                 "cost_basis": str(bucket["cost_basis"]),
                 "realized_pnl": str(bucket["realized_pnl"]),
                 "dividend_total": str(bucket["dividend_total"]),
+                "annual_dividend": str(annual),
+                "dividend_yield": str(position_yield) if position_yield is not None else None,
                 "last_price": str(price) if price is not None else None,
                 "market_value": str(market_value) if market_value is not None else None,
                 "unrealized_pnl": str(unrealized) if unrealized is not None else None,
@@ -165,20 +244,37 @@ def build_summary(user, base: str | None = None) -> dict:
             total_value += Decimal(pos["market_value"]) * rate
             total_unrealized += Decimal(pos["unrealized_pnl"]) * rate
 
-    dividend_qs = DividendRecord.objects.filter(user=user)
+    dividend_rows = dividend_entries(user)
     dividend_total = ZERO
-    for row in dividend_qs:
-        rate = get_rate(row.currency, base)
-        dividend_total += (row.net or ZERO) * rate
+    for currency, amount in sum_by_currency(dividend_rows).items():
+        rate = get_rate(currency or base, base)
+        if (currency or base) != base and rate == 1:
+            fx_warning = True
+        dividend_total += amount * rate
+
+    annual_total = ZERO
+    for entry in within_window(dividend_rows, timezone.localdate(), ANNUAL_WINDOW_DAYS):
+        annual_total += entry.amount * get_rate(entry.currency or base, base)
 
     flows: list[tuple[date, float]] = []
     deposits = Transaction.objects.filter(user=user, side__in=("DEPOSIT", "WITHDRAW")).values_list("traded_at", "amount", "currency")
     for traded_at, amount, currency in deposits:
         rate = get_rate(currency, base)
         flows.append((traded_at.date(), -float(Decimal(amount) * rate)))
+    # 股息是投资者实实在在收到的现金，必须作为正现金流进 XIRR —— 它不在市值里
+    # （除非分红再投），漏掉就等于把年化收益率算低。日期未知的股息不进现金流：
+    # 硬塞一个今天会让年化被短期样本带偏。
+    for entry in dividend_rows:
+        if entry.pay_date is None or entry.amount == ZERO:
+            continue
+        rate = get_rate(entry.currency or base, base)
+        flows.append((entry.pay_date, float(entry.amount * rate)))
     if total_value:
         flows.append((timezone.localdate(), float(total_value)))
     annualized = xirr(flows) if len(flows) >= 2 else None
+
+    yield_value = dividend_yield(annual_total, total_cost)
+    monthly = monthly_passive_income(annual_total)
 
     return {
         "base_currency": base,
@@ -187,6 +283,10 @@ def build_summary(user, base: str | None = None) -> dict:
         "unrealized_pnl": str(total_unrealized),
         "realized_pnl": str(total_realized),
         "dividend_total": str(dividend_total),
+        "dividend_annual": str(annual_total),
+        # 成本为 0（已清仓）时算不出股息率，返回 null 而不是 0：见 dividend_income.dividend_yield
+        "dividend_yield": str(yield_value) if yield_value is not None else None,
+        "monthly_passive_income": str(monthly) if monthly is not None else None,
         "total_pnl": str(total_unrealized + total_realized + dividend_total),
         "annualized": annualized,
         "annualized_note": None if annualized is not None else "现金流不足或日期过于集中，暂无法计算年化",
@@ -196,16 +296,29 @@ def build_summary(user, base: str | None = None) -> dict:
 
 
 def dividend_monthly(user, year: int | None = None) -> list[dict]:
-    qs = DividendRecord.objects.filter(user=user)
-    if year:
-        qs = qs.filter(pay_date__year=year)
+    """股息月度分布。
+
+    net / count 走统一股息口径（``dividend_entries``），与「累计股息」必然同源 ——
+    否则同一页上「累计股息」和「月度分布合计」会各说各话。
+    gross / tax 只有股息明细（DividendRecord）里才有，因此仅对「有明细的那部分」
+    归集；纯流水录入的股息这两列为 0，表示「没有明细可查」，不是「没收过税」。
+    """
     buckets: dict[str, dict] = defaultdict(lambda: {"net": ZERO, "gross": ZERO, "tax": ZERO, "count": 0})
-    for row in qs:
+    for entry in dividend_entries(user):
+        if year and (entry.pay_date is None or entry.pay_date.year != year):
+            continue
+        key = f"{entry.pay_date.year}-{entry.pay_date.month:02d}" if entry.pay_date else "未定"
+        buckets[key]["net"] += entry.amount
+        buckets[key]["count"] += 1
+
+    detail_qs = DividendRecord.objects.filter(user=user)
+    if year:
+        detail_qs = detail_qs.filter(pay_date__year=year)
+    for row in detail_qs:
         key = f"{row.pay_date.year}-{row.pay_date.month:02d}" if row.pay_date else "未定"
-        buckets[key]["net"] += row.net or ZERO
         buckets[key]["gross"] += row.gross or ZERO
         buckets[key]["tax"] += row.tax or ZERO
-        buckets[key]["count"] += 1
+
     return [
         {"month": k, "net": str(v["net"]), "gross": str(v["gross"]), "tax": str(v["tax"]), "count": v["count"]}
         for k, v in sorted(buckets.items())

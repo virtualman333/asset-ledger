@@ -99,6 +99,60 @@ def main():
     # 7) 总览
     r = s.get(f"{BASE}/analytics/summary/")
     check("总览", r.status_code == 200, r.text[:200])
+    summary = r.json() if r.status_code == 200 else {}
+
+    # 8) 股息口径三处必须同源（持仓明细 / 总览 / 月度分布）
+    #    修复前的实际故障：持仓页读「股息流水」、统计页读「股息明细」，同一个数字
+    #    一个是 0 一个是 810。这里断言三者相等，任何一处再分家都会当场报出来。
+    r = s.get(f"{BASE}/analytics/positions/")
+    rows = r.json() if isinstance(r.json(), list) else r.json().get("results", [])
+    pos_dividend = sum(float(p.get("dividend_total") or 0) for p in rows)
+    total_dividend = float(summary.get("dividend_total") or 0)
+    check(
+        "持仓页股息合计 == 统计页累计股息",
+        abs(pos_dividend - total_dividend) < 1e-9,
+        f"{pos_dividend} vs {total_dividend}",
+    )
+    r = s.get(f"{BASE}/analytics/dividends/")
+    months = r.json().get("months", []) if r.status_code == 200 else []
+    check(
+        "月度分布合计 == 统计页累计股息",
+        abs(sum(float(m.get("net") or 0) for m in months) - total_dividend) < 1e-9,
+        json.dumps(months, ensure_ascii=False)[:200],
+    )
+
+    # 9) 股息率与月度被动收入
+    check("总览含股息率字段", "dividend_yield" in summary, sorted(summary))
+    check("总览含月度被动收入字段", "monthly_passive_income" in summary, sorted(summary))
+    if total_dividend > 0:
+        cost = float(summary.get("cost_basis") or 0)
+        # 只断言「近一年股息 > 0」而不是等于累计股息：脚本里的日期是写死的，
+        # 一年之后这些股息会自然滑出观察窗口，断言相等会变成定时炸弹。
+        check("总览含近一年股息", float(summary.get("dividend_annual") or 0) > 0,
+              summary.get("dividend_annual"))
+        if cost > 0:
+            check(
+                "股息率 == 近一年股息 / 成本",
+                abs(float(summary["dividend_yield"]) - float(summary["dividend_annual"]) / cost) < 1e-9,
+                summary.get("dividend_yield"),
+            )
+            check(
+                "月度被动收入 == 近一年股息 / 12",
+                abs(float(summary["monthly_passive_income"]) - float(summary["dividend_annual"]) / 12) < 1e-9,
+                summary.get("monthly_passive_income"),
+            )
+
+    # 10) 形态 B：股息只落一条流水（没有股息明细）—— 这条路径曾经直接 500
+    r = s.post(f"{BASE}/transactions/records/", json={
+        "account": aid, "asset": asset["id"], "side": "DIVIDEND", "amount": "12.34",
+        "currency": "CNY", "traded_at": "2026-07-01T14:20:00", "client_request_id": "harmony-dividend-tx-1",
+    })
+    check("形态B 股息流水入账", r.status_code in (200, 201), r.text[:200])
+    r = s.get(f"{BASE}/analytics/summary/")
+    check("形态B 下总览不报错", r.status_code == 200, f"HTTP {r.status_code} {r.text[:160]}")
+    if r.status_code == 200:
+        check("形态B 的股息被算进累计股息",
+              float(r.json()["dividend_total"]) >= 12.34, r.json().get("dividend_total"))
 
     print()
     print(f"结果：{'-' if FAILS else '全部通过'}  {len(FAILS)} 个失败" if FAILS else "结果：全部通过")
