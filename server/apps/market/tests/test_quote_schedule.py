@@ -159,6 +159,63 @@ class WiringTest(unittest.TestCase):
         self.assertIn("QUOTE_REFRESH_MINUTES", source)
         self.assertIn('QUOTE_REFRESH_MINUTES = int(os.getenv("QUOTE_REFRESH_MINUTES", "15"))', source)
 
+    def test_多worker部署只让一个进程去抓(self):
+        """`should_autostart` 只看 argv：`gunicorn -w 4` 的每个 worker 它都放行。
+
+        实测（`_e2e_al_sched.py`，fork 4 个真进程各走一遍 ready()）：修之前 4/4 都起了
+        调度器，于是每轮抓 4 遍 —— README 已知约束里「轮询太快会被源限流」被自己撞上。
+        `build_scheduler` 的 `max_instances=1` 只在单个调度器内部生效，跨进程无效。
+
+        所以这条锁盯着 `scheduler.autostart` 里那把跨进程锁**还在、并且顺序对**。
+        """
+        source = strip_comments((APP_DIR / "scheduler.py").read_text(encoding="utf-8"))
+        self.assertIn("quote_lock.try_acquire(", source, "跨进程锁被拆掉了：多 worker 会各抓一遍")
+        self.assertIn("if lock is None", source, "抢不到锁必须直接放弃，不能照常起")
+
+        # ★ 顺序：先判据、后抢锁。反过来的话 autoreload 的看门狗父进程会先把锁拿走
+        # 却不起任务，真正干活的子进程永远抢不到 —— 从「抓两遍」变成「一遍都不抓」。
+        self.assertLess(
+            source.index("should_autostart("),
+            source.index("quote_lock.try_acquire("),
+            "抢锁必须在判据之后",
+        )
+
+    def test_锁在异常路径与停机时都会被放掉(self):
+        # 拿不到锁的进程如果还留着 fd，下一个进程就永远起不来
+        source = strip_comments((APP_DIR / "scheduler.py").read_text(encoding="utf-8"))
+        self.assertGreaterEqual(source.count(".release()"), 2, "调度器起不来、以及 stop() 时都要放锁")
+        self.assertIn("def stop(", source)
+
+    def test_锁文件位置来自设置(self):
+        # 锁是本机的，位置必须可配置（多机部署时每台机器各一把）。
+        # 断言写死整句而不是「出现过这个变量名」：`.env` 里写成空串时也该退回默认位置，
+        # 而 `os.getenv(k, default)` 会把空串当成「已设置」—— 差别就在这个 `or` 上。
+        source = (SERVER_DIR / "config" / "settings.py").read_text(encoding="utf-8")
+        self.assertIn(
+            'QUOTE_REFRESH_LOCK = os.getenv("QUOTE_REFRESH_LOCK") or str(BASE_DIR / "var" / "quote_refresh.lock")',
+            source,
+        )
+
+
+def strip_comments(source: str) -> str:
+    """剥掉注释与文档字符串。
+
+    结构锁读源码前必须剥注释 —— 解释「不许这么做」的注释里也会出现那些字样，
+    这个仓库已经栽过两次（见台账）。
+    """
+    kept = []
+    in_doc = False
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.count('"""') == 1:
+            in_doc = not in_doc
+            continue
+        if in_doc or stripped.startswith("#"):
+            continue
+        kept.append(line.split("  #")[0])
+    return "\n".join(kept)
+
+
 
 if __name__ == "__main__":
     unittest.main()

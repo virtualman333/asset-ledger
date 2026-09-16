@@ -40,7 +40,7 @@
 | --- | --- | --- |
 | 框架 | Django 5.2 LTS + DRF + SimpleJWT | Python 3.13（托管版 venv） |
 | 数据库 | MySQL 8.4 | 驱动优先 `mysqlclient`，Windows 装不上退回 `PyMySQL` |
-| 任务调度 | **开发期：Django-Q2 / APScheduler 单进程**；生产 Linux：Celery + Redis | Windows 上 Celery worker 坑多，不建议主力 |
+| 任务调度 | **实际落地：APScheduler 挂在服务进程里**（`market/scheduler.py`，跨进程文件锁保证单实例）；生产若要多机/重任务再上 Celery + Redis | 已实现的是进程内单调度器，别再按「Celery」去找代码 |
 | 部署 | 开发：本机 `0.0.0.0:8000`；长期：云服务器 + Nginx + Gunicorn + HTTPS | 模拟器用 `10.0.2.2:8000`，真机用局域网 IP 或公网域名 |
 | 规范 | ruff + pytest + drf-spectacular（OpenAPI） | 接口文档自动生成，端上可对照 |
 
@@ -111,6 +111,19 @@
 时候更新，没跑过演示数据的账号现价恒为空、总资产恒为 `0.00`，全链路静默。
 定时任务的判据（什么时候该起、autoreload 双进程怎么躲）单独放在
 `market/quote_schedule.py`，纯函数、有单测。
+
+**判据只回答了「这个进程该不该起」，没回答「这台机器上是不是已经有别人在起」。**
+`gunicorn -w 4` 这类多 worker 部署下每个 worker 都会跑一遍 `AppConfig.ready()`，
+判据对每个 worker 都放行（argv 里确实没有 `manage.py`），而调度器的 `max_instances=1`
+只在单个调度器内部生效 —— 实测 4 / 4 个 worker 各起一个，每轮抓 4 遍，
+正好撞上下面「行情源被限流」那条风险。所以补一层进程间互斥：`market/quote_lock.py`
+（标准库文件锁，`QUOTE_REFRESH_LOCK` 指定位置，默认 `server/var/quote_refresh.lock`）。
+选文件锁而不是数据库锁，是因为 `ready()` 跑的时候数据库不一定连得上（`migrate` 之前），
+拿不到锁就等于不起任务 —— 一个会因为基础设施状态而静默失效的判据。
+锁由操作系统在 fd 关闭时释放，`kill -9` 也不会留死锁。
+
+**顺序是先判据、后抢锁**：反过来的话 `runserver` 的看门狗父进程会先抢到锁再放弃起任务，
+干活的子进程永远抢不到，从「抓两遍」变成「一遍都不抓」。
 
 ### 4.4 收益统计（M2-M3）
 
@@ -238,6 +251,7 @@ GET    /analytics/calendar            股息日历
 | 无 HarmonyOS NEXT 真机 | 模拟器先跑通；真机调试必须有华为账号 + 调试签名 |
 | LLM 识别错数字 = 账目错 | 草稿箱确认 + 低置信标红 + 原图对照 + 可回滚，账目安全不依赖模型准确率 |
 | 行情源不稳定/被限流 | 多源热切换 + 缓存兜底（用上一次价格并标记"延迟"） |
+| Gunicorn 多 worker 各起一个调度器 | 进程间文件锁（`market/quote_lock.py`），只有抢到锁的进程抓行情 |
 | XIRR 在极端现金流下不收敛 | 加二分兜底，失败时降级为简单年化并标注 |
 | Windows 上 Celery 难搞 | 开发期 Django-Q2；生产放 Linux |
 

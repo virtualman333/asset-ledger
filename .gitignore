@@ -8,6 +8,8 @@ venv/
 *.sqlite3
 server/media/
 server/staticfiles/
+# 运行时目录（跨进程锁等），不入库
+server/var/
 .pytest_cache/
 .ruff_cache/
 

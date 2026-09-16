@@ -150,3 +150,12 @@ QUOTE_CACHE_SECONDS = int(os.getenv("QUOTE_CACHE_SECONDS", "60"))
 # 关掉之后仍然可以手动调 `manage.py refresh_quotes` 或让客户端带 refresh=1。
 # 免 Key 的免费源不适合按秒轮询，默认给一个偏保守的 15 分钟。
 QUOTE_REFRESH_MINUTES = int(os.getenv("QUOTE_REFRESH_MINUTES", "15"))
+
+# 定时抓行情的**跨进程锁**：一台机器上只允许一个进程真的去抓。
+# 多 worker 部署（gunicorn -w 4 / uvicorn --workers 4）时每个 worker 都会跑一遍
+# AppConfig.ready()，而 `max_instances=1` 只在单个调度器内部生效 —— 没有这把锁
+# 就是每个 worker 各起一个调度器、每轮抓 N 遍，把免费源撞到限流（README 已知约束）。
+# 必须是**本机**路径：多机部署时每台机器各跑一个才是对的，别放到网络盘上。
+# 用 `or` 而不是 getenv 的默认值：.env 里写成 `QUOTE_REFRESH_LOCK=`（空串）
+# 也应该退回默认位置，而不是悄悄换个地方 —— 空串会被 getenv 当成「已设置」。
+QUOTE_REFRESH_LOCK = os.getenv("QUOTE_REFRESH_LOCK") or str(BASE_DIR / "var" / "quote_refresh.lock")

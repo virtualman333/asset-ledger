@@ -46,12 +46,27 @@
 | `python manage.py refresh_quotes [--force]` | 不想在服务进程里挂线程时，交给 cron / 宝塔计划任务 |
 | `GET /market/quotes/?asset_ids=1,2&refresh=1` | 端上主动拉一次（客户端当前不调，保留给调试与将来的下拉刷新） |
 
+**一台机器上只有一个进程会真的去抓。** 判据分两层：
+
+- 「这个进程该不该起任务」是纯函数（`market/quote_schedule.py`）：间隔为 0 不起、
+  一次性命令不起、`runserver` 的 autoreload 只让子进程起。
+- 「这一台机器上是不是已经有别人在抓」交给一把文件锁（`market/quote_lock.py`，
+  默认 `server/var/quote_refresh.lock`，可设 `QUOTE_REFRESH_LOCK` 改位置）。
+  因为 `gunicorn -w 4` 这种多 worker 部署下，每个 worker 都会 import 一次 WSGI 应用、
+  各自跑一遍 `AppConfig.ready()`，而调度器的 `max_instances=1` **只在单个调度器内部生效**。
+  实测修之前是 4 / 4 个 worker 各起一个调度器 —— 正好撞上下面「轮询太快会被源限流」那条。
+  锁在进程退出（包括 `kill -9`）时由操作系统自动释放，不需要超时与清理。
+
+**顺序是先判据、后抢锁。** 反过来的话，`runserver` 那个只负责看门的父进程会先把锁拿走
+再放弃起任务，真正干活的子进程永远抢不到 —— 从「每轮抓两遍」变成「一遍都不抓」。
+
 为什么值得单独写一段：这句话（「后端定时抓行情」）在 README 上挂了很久，但代码里
 **没有任何持续的机制会去写行情表** —— 只有手工调接口（客户端从来不调它）和一次性的
 `seed_demo`。实测库里最后一批快照是 `seed_demo` 在 2026-09-16 16:55 同一秒写下的 4 条，
 此后 8 小时一格没动；没跑过演示数据的账号则连一条都没有，现价恒为空、总资产恒 `0.00`。
-所以现在「定时任务真的存在」和「写入口只有一处」都各有一条单测锁着
-（`apps/market/tests/test_quote_schedule.py`）。
+所以现在「定时任务真的存在」「写入口只有一处」「多 worker 也只起一个」都各有一条单测锁着
+（`apps/market/tests/test_quote_schedule.py`、`test_quote_lock.py`、`test_scheduler_autostart.py`）。
+
 
 ## 技术栈
 
@@ -124,6 +139,11 @@ python -m unittest discover -s apps -t .
 第三条同样不 import django：持仓估值（`apps/analytics/valuation.py`）。它错的方式是
 **「拿不到报价」被当成「不值钱」** —— 总资产偏小、年化变成巨额负收益，也一样不报错。
 定时抓行情该不该启动的判据（`apps/market/quote_schedule.py`）同理，可注入假的调度器来断言。
+
+那条判据管不着的另一半（**多 worker 部署会不会各抓一遍**）在
+`apps/market/quote_lock.py`：标准库文件锁，同样不 import django、不连库。
+它的断言刻意落在真实的 OS 锁状态上（抢两次、放一次再抢、真开三个进程同时抢），
+因为这条判据唯一会错的方式就是「以为排他了，其实没有」—— 注入假锁只能测出「有没有调用」。
 
 ### 流水的现金变动（`amount`）
 
@@ -203,4 +223,7 @@ GET  /api/v1/analytics/positions|summary|dividends|calendar
 - 美股行情延迟约 15 分钟（腾讯/Yahoo 免费源），需要实时行情请接付费源
 - 免费源没有推送，只能按 `QUOTE_REFRESH_MINUTES` 轮询（默认 15 分钟）；轮询太快会被源限流，
   拿不到价时会退回上一次的旧价并把 `stale` 标出来，不会写空记录
+- **多 worker 部署**（`gunicorn -w 4`）时只有抢到文件锁的那一个 worker 会真的抓行情，
+  其余进程只跑 Web 请求 —— 这是刻意的，否则每轮会被放大成 N 遍。
+  多机部署时每台机器各有一个调度器（锁是**本机**的，别放到网络盘上）
 - 股息数据以手动录入与 Agent 识别为主，自动股息日历仍在 TODO
