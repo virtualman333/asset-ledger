@@ -162,20 +162,20 @@ footer{border-top:1px solid var(--border);padding:34px 0 46px;margin-top:24px}
 
 <main>
   <div class="wrap hero">
-    <span class="eyebrow">●  原生鸿蒙 + Django · M5 开发中</span>
+    <span class="eyebrow">●  原生鸿蒙 + Django · v0.1.0</span>
     <h1>股息视角的多市场投资资产记录</h1>
     <p class="lead">券商截图、成交短信直接丢给 Agent，识别成草稿，确认才入账。持仓、成本、盈亏、股息全部由流水推导 —— 流水是唯一事实源。</p>
     <div class="cta"><a class="btn btn-primary" href="https://github.com/virtualman333/asset-ledger">在 GitHub 上查看 →</a><a class="btn btn-ghost" href="https://github.com/virtualman333/asset-ledger/tree/main/docs">设计文档</a></div>
-    <div class="stats"><div class="stat"><b>6 类</b><span>市场：A股/港股/美股/基金/外汇/加密</span></div><div class="stat"><b>M0–M4</b><span>已完成</span></div><div class="stat"><b>M5</b><span>进行中</span></div></div>
+    <div class="stats"><div class="stat"><b>6 类</b><span>市场：A股/港股/美股/基金/外汇/加密</span></div><div class="stat"><b>M0–M4</b><span>已完成</span></div><div class="stat"><b>v0.1.0</b><span>首个版本</span></div></div>
   </div>
 
   <section id="features"><div class="wrap">
     <div class="sec-head"><h2>核心能力</h2><p>从实际使用出发，而不是从功能清单出发</p></div>
-    <div class="grid"><div class="card"><span class="ico">📸</span><h3>一句话记账</h3><p>券商截图 / 成交短信丢给 Agent，多模态识别成草稿，一键确认入账；低置信度或缺字段强制标红补全。</p></div><div class="card"><span class="ico">🌍</span><h3>多市场统一口径</h3><p>A 股 / 港股 / 美股 / 基金 / 外汇 / 数字货币，移动加权成本 + XIRR 年化 + 多币种折算。</p></div><div class="card"><span class="ico">📜</span><h3>流水是唯一事实源</h3><p>持仓、成本、盈亏、股息全部由流水推导，不存第二份真相。</p></div><div class="card"><span class="ico">💵</span><h3>股息模块</h3><p>股息记录、月度被动收入分布、股息日历单独成模块。</p></div><div class="card"><span class="ico">🔒</span><h3>原始凭证永不硬删</h3><p>每笔 Agent 入账的流水都能回溯到截图与识别原文。</p></div><div class="card"><span class="ico">📱</span><h3>原生鸿蒙客户端</h3><p>HarmonyOS NEXT + ArkTS/ArkUI，relationalStore 本地缓存，品牌紫 #7166F0。</p></div></div>
+    <div class="grid"><div class="card"><span class="ico">📸</span><h3>一句话记账</h3><p>券商截图 / 成交短信丢给 Agent，多模态识别成草稿，一键确认入账；低置信度或缺字段强制标红补全。</p></div><div class="card"><span class="ico">🌍</span><h3>多市场统一口径</h3><p>A 股 / 港股 / 美股 / 基金 / 外汇 / 数字货币，移动加权成本 + XIRR 年化 + 多币种折算。</p></div><div class="card"><span class="ico">📜</span><h3>流水是唯一事实源</h3><p>持仓、成本、盈亏、股息全部由流水推导，不存第二份真相。</p></div><div class="card"><span class="ico">💵</span><h3>股息不只记账</h3><p>股息记录 + 股息率（近一年股息 ÷ 成本）+ 月度被动收入 + 月度分布 + 股息日历。同一笔股息在持仓、总览、月度分布三处只有一个口径，不会各算各的。</p></div><div class="card"><span class="ico">🔒</span><h3>原始凭证永不硬删</h3><p>每笔 Agent 入账的流水都能回溯到截图与识别原文。</p></div><div class="card"><span class="ico">📱</span><h3>原生鸿蒙客户端</h3><p>HarmonyOS NEXT + ArkTS/ArkUI，relationalStore 本地缓存，品牌紫 #7166F0。</p></div></div>
   </div></section>
 
   <section id="stack"><div class="wrap">
-    <div class="sec-head"><h2>技术栈</h2><p>路线图进度：M5 开发中</p></div>
+    <div class="sec-head"><h2>技术栈</h2><p>最新版本：v0.1.0</p></div>
     <div class="pills"><span class="pill">HarmonyOS NEXT</span><span class="pill">ArkTS / ArkUI</span><span class="pill">Django 5.2</span><span class="pill">DRF</span><span class="pill">SimpleJWT</span><span class="pill">MySQL 8.4</span><span class="pill">APScheduler</span><span class="pill">多源行情</span></div>
   </div></section>
 
@@ -187,7 +187,7 @@ python -m venv .venv
 cp .env.example .env
 python manage.py migrate</code></pre></div><div class="step"><div class="step-head"><span class="dot"></span>造演示数据并启动<button class="copy" type="button">复制</button></div><pre><code>python manage.py seed_demo
 python manage.py runserver 0.0.0.0:8000</code></pre></div><div class="step"><div class="step-head"><span class="dot"></span>冒烟测试<button class="copy" type="button">复制</button></div><pre><code>python scripts/smoke_api.py            <span class="cmt"># 注册→记账→行情→统计→Agent 识别→入账</span>
-python scripts/smoke_record_flow.py   <span class="cmt"># 记一笔页：标的自动建→买卖→股息→出入金→持仓推导</span></code></pre></div></div>
+python scripts/smoke_record_flow.py   <span class="cmt"># 记一笔页 + 股息口径三处同源</span></code></pre></div></div>
   </div></section>
 </main>
 
