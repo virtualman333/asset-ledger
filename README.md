@@ -183,6 +183,12 @@ python -m unittest discover -s apps -t .
 （报告里是 `OK (skipped=1)`，不是 `FAILED`），装上 `requirements.txt` 之后会真的跑 ——
 上面那条命令的承诺是「不需要 Django 也能跑」，跳过才对得起这句话。
 
+这句承诺现在**真的跑一遍来钉住**（`apps/core/tests/test_no_django_required.py`）：在一个
+「`import django` 会失败」的子进程里把整套测试重新跑一遍，要求 `OK (skipped=1)`。理由是
+装了依赖的开发机上必然有 Django，任何一个测试模块多一句 `from django...` 在那里都照常
+全绿 —— 只有照着本文档在一台裸 Python 上跑的人才会撞上一片 ERROR。多一个模块需要 Django，
+`skipped` 就变成 2，这条检查立刻红。
+
 ### 流水的现金变动（`amount`）
 
 `amount` = 账户现金变动，**正数 = 资金流入、负数 = 资金流出**（已含 `fee` / `tax`）。
