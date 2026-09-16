@@ -7,7 +7,7 @@
 ## 它解决什么
 
 - 手动记账太烦 —— 券商截图、成交短信直接丢给 Agent，识别成草稿，一键确认入账
-- 价格靠手查 —— 后端定时抓行情，持仓浮盈自动更新
+- 价格靠手查 —— 后端每 15 分钟自动抓一轮行情，持仓浮盈自己更新
 - 收益算不清 —— 移动加权成本 + XIRR 年化 + 多币种折算，口径写死在引擎里
 - 股息没人管 —— 股息记录、月度被动收入、股息日历单独成模块
 
@@ -35,12 +35,30 @@
 
 持仓明细、总览统计、股息月度分布三处**都调用这份归集**，任何一处都不许自己再算一遍。
 
+### 行情是怎么更新的（写入口也只有一个）
+
+写 `PriceQuote`（行情快照）的地方只有一处：**`server/apps/market/services.py` 的 `refresh_quote()`**。
+它同时负责「缓存期内直接复用」的判据，三种触发方式都调它：
+
+| 触发方式 | 场景 |
+| --- | --- |
+| 进程内定时任务（APScheduler） | 默认行为，`QUOTE_REFRESH_MINUTES` 决定间隔，默认 15 分钟；`0` 表示关闭 |
+| `python manage.py refresh_quotes [--force]` | 不想在服务进程里挂线程时，交给 cron / 宝塔计划任务 |
+| `GET /market/quotes/?asset_ids=1,2&refresh=1` | 端上主动拉一次（客户端当前不调，保留给调试与将来的下拉刷新） |
+
+为什么值得单独写一段：这句话（「后端定时抓行情」）在 README 上挂了很久，但代码里
+**没有任何持续的机制会去写行情表** —— 只有手工调接口（客户端从来不调它）和一次性的
+`seed_demo`。实测库里最后一批快照是 `seed_demo` 在 2026-09-16 16:55 同一秒写下的 4 条，
+此后 8 小时一格没动；没跑过演示数据的账号则连一条都没有，现价恒为空、总资产恒 `0.00`。
+所以现在「定时任务真的存在」和「写入口只有一处」都各有一条单测锁着
+（`apps/market/tests/test_quote_schedule.py`）。
+
 ## 技术栈
 
 | 层 | 选型 |
 | --- | --- |
 | 客户端 | HarmonyOS NEXT（API 12+）ArkTS + ArkUI，relationalStore 缓存，品牌紫 `#7166F0` |
-| 后端 | Django 5.2 + DRF + SimpleJWT，MySQL 8.4，APScheduler 调度 |
+| 后端 | Django 5.2 + DRF + SimpleJWT，MySQL 8.4，APScheduler（进程内定时抓行情，见上） |
 | 行情 | 腾讯（A/港/美）、OKX（加密）、Yahoo（美股备用）、Frankfurter + ER-API（汇率） |
 | Agent | 多模态 LLM（OpenAI 兼容接口），无 Key 时降级为规则解析 |
 
@@ -77,6 +95,14 @@ python manage.py seed_demo                      # 造演示数据：账户/标�
 python manage.py runserver 0.0.0.0:8000
 ```
 
+`runserver` 起来之后行情就由进程内的定时任务接管（每 15 分钟一轮）。不想让它挂在服务
+进程里，就把 `QUOTE_REFRESH_MINUTES=0` 写进 `.env`，改用命令行 + 系统定时器：
+
+```bash
+python manage.py refresh_quotes          # 抓一轮（缓存期内的标的会跳过）
+python manage.py refresh_quotes --force  # 忽略缓存，强制重抓
+```
+
 冒烟测试（后端已启动）：
 
 ```bash
@@ -94,6 +120,10 @@ python -m unittest discover -s apps -t .
 两条最容易写错、又最影响账目的规则刻意不 import django，就是为了让它们能被秒级验证：股息归集（`apps/analytics/dividend_income.py`）与流水金额口径（`apps/transactions/amount_rules.py`）。
 
 这两处出错的方式都是**静默**的：前者会让同一笔股息算两遍，后者会让一笔入金记成 0 —— 界面上都看不出异常，只有数字悄悄错了。
+
+第三条同样不 import django：持仓估值（`apps/analytics/valuation.py`）。它错的方式是
+**「拿不到报价」被当成「不值钱」** —— 总资产偏小、年化变成巨额负收益，也一样不报错。
+定时抓行情该不该启动的判据（`apps/market/quote_schedule.py`）同理，可注入假的调度器来断言。
 
 ### 流水的现金变动（`amount`）
 
@@ -145,6 +175,15 @@ GET  /api/v1/analytics/positions|summary|dividends|calendar
 | `dividend_yield` | 股息率 = `dividend_annual` ÷ 持仓成本；**成本为 0（已清仓）时是 `null` 而不是 0** |
 | `monthly_passive_income` | 月度被动收入 = `dividend_annual` ÷ 12 |
 | `annualized` | XIRR 年化。出入金与**收到的股息现金**都算现金流（股息不体现在市值里，漏掉会把年化算低） |
+| `market_value` | **只含拿到报价的持仓**。拿不到报价的那部分不在这个数里 |
+| `unpriced_cost_basis` | 有数量但拿不到报价的持仓成本（已折算），与 `market_value` 相加才是「此刻大约值多少」 |
+| `unpriced_symbols` | 上面那些持仓的标的代码，用来告诉用户是哪几个 |
+| `valuation_note` | 一句话解释上面的数字：有持仓没报价、或年化为什么算不出来；一切正常时是 `null` |
+
+没报价的持仓**按成本计入**总资产与 XIRR 终值（口径写在 `apps/analytics/valuation.py`，唯一定义处）：
+按 0 计等于宣布这笔钱蒸发了，年化会给出一个巨额负收益 —— 而这正是它以前的行为，且只在
+「拿不到报价」时才发生，很难被撞见。取成本的代价是这部分盈亏未知，所以 `valuation_note`
+必须点名是哪几个标的，页面上那句话不是装饰。
 
 `analytics/positions/` 每一行也带 `dividend_total` / `annual_dividend` / `dividend_yield`。
 
@@ -162,4 +201,6 @@ GET  /api/v1/analytics/positions|summary|dividends|calendar
 - 鸿蒙端目前只做文本凭证提交，截图上传接口后端已就绪，端上接入在 M5
 - **股息率与月度被动收入后端已提供**（`analytics/summary/`），鸿蒙统计页尚未展示，端上接入在 M5
 - 美股行情延迟约 15 分钟（腾讯/Yahoo 免费源），需要实时行情请接付费源
+- 免费源没有推送，只能按 `QUOTE_REFRESH_MINUTES` 轮询（默认 15 分钟）；轮询太快会被源限流，
+  拿不到价时会退回上一次的旧价并把 `stale` 标出来，不会写空记录
 - 股息数据以手动录入与 Agent 识别为主，自动股息日历仍在 TODO

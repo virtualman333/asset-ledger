@@ -5,14 +5,19 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 import logging
+from typing import NamedTuple
 
 import requests
+from django.conf import settings
+from django.utils import timezone
 
 from apps.assets.models import Asset
 from apps.core.models import Market
+
+from .models import PriceQuote
 
 logger = logging.getLogger(__name__)
 TIMEOUT = 6
@@ -156,3 +161,83 @@ def fetch_fx(base: str, quote: str) -> Decimal | None:
 
 def today() -> date:
     return date.today()
+
+
+class QuoteRefresh(NamedTuple):
+    """一轮报价刷新的结果。
+
+    quote    最新快照（缓存期内直接复用，也可能是上一次的旧价）
+    stale    这一轮想抓但没抓到，交出去的是旧价
+    fetched  这一轮真的抓到了新价并落库
+    """
+
+    quote: PriceQuote | None
+    stale: bool
+    fetched: bool
+
+
+def refresh_quote(
+    asset: Asset,
+    *,
+    force: bool = False,
+    now=None,
+    cache_seconds: int | None = None,
+) -> QuoteRefresh:
+    """抓一只标的的行情并落库。
+
+    **全仓库唯一一处写 `PriceQuote` 的代码** —— 定时任务、管理命令、
+    `/market/quotes/` 接口都调它。
+
+    在这之前，会写行情快照的只有两条不持续的路：接口（客户端从不调，只有手工
+    调试用过）与一次性的 `seed_demo`。于是行情只在被人手动点一下时更新，
+    没跑过演示数据的账号连一条都没有 —— 现价恒为空、总资产恒 0.00、浮盈恒为空，
+    整条链路一声不吭（见 `quote_schedule.py` 的模块说明）。
+    抓不到就什么都不写，把上一次的价标成 stale 交出去 —— 不写空记录。
+    """
+    cache_seconds = settings.QUOTE_CACHE_SECONDS if cache_seconds is None else cache_seconds
+    now = now or timezone.now()
+    cut = now - timedelta(seconds=cache_seconds)
+
+    latest = PriceQuote.objects.filter(asset=asset).order_by("-fetched_at").first()
+    if latest and not force and latest.fetched_at >= cut:
+        return QuoteRefresh(latest, stale=False, fetched=False)
+
+    data = fetch_quote(asset)
+    if not data or not data.get("price"):
+        return QuoteRefresh(latest, stale=True, fetched=False)
+
+    quote = PriceQuote.objects.create(
+        asset=asset,
+        price=data["price"],
+        currency=data.get("currency") or asset.currency,
+        change_pct=data.get("change_pct"),
+        source=data.get("source", ""),
+    )
+    return QuoteRefresh(quote, stale=False, fetched=True)
+
+
+def refresh_quotes(
+    assets=None,
+    *,
+    force: bool = False,
+    now=None,
+    cache_seconds: int | None = None,
+) -> dict:
+    """抓一轮：不传 `assets` 就是全部标的。定时任务与管理命令调这个。
+
+    返回 `{"fetched": n, "skipped": n, "failed": n}` —— 三种结果分开报，
+    否则「全都失败」和「全在缓存里」看起来都是 0 条，又是一次静默。
+    """
+    if assets is None:
+        assets = list(Asset.objects.all())
+
+    fetched = skipped = failed = 0
+    for asset in assets:
+        result = refresh_quote(asset, force=force, now=now, cache_seconds=cache_seconds)
+        if result.fetched:
+            fetched += 1
+        elif result.stale:
+            failed += 1
+        else:
+            skipped += 1
+    return {"fetched": fetched, "skipped": skipped, "failed": failed}

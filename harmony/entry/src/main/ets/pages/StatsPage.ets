@@ -47,6 +47,11 @@ export struct StatsPage {
             this.summary.annualized === null ? '待计算' : `${(this.summary.annualized * 100).toFixed(2)}%`,
             '#1A1A1A'
           )
+          // 年化旁边那句解释以前算出来了却没显示：用户只看到「待计算」，
+          // 不知道是现金流不够、还是有持仓拿不到报价
+          if (this.summary.valuation_note) {
+            Text(this.summary.valuation_note).fontSize(11).fontColor('#8A8A8A').width('100%')
+          }
         }
         .width('100%')
         .padding(16)

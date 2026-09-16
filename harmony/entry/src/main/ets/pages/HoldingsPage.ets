@@ -62,6 +62,10 @@ export struct HoldingsPage {
             .fontSize(12)
             .fontColor('#8A8A8A')
         }
+        // 「总资产 0.00」不能就这么摆着：没报价的持仓按成本算在下面这句话里说清楚
+        if (this.summary.valuation_note) {
+          Text(this.summary.valuation_note).fontSize(11).fontColor('#BA7517').width('100%')
+        }
         if (this.summary.fx_warning) {
           Text('部分币种缺少汇率，折算可能不准').fontSize(11).fontColor('#BA7517')
         }

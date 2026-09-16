@@ -144,3 +144,9 @@ LLM_TEXT_MODEL = os.getenv("LLM_TEXT_MODEL", "gpt-4o-mini")
 
 # 行情抓取（秒）
 QUOTE_CACHE_SECONDS = int(os.getenv("QUOTE_CACHE_SECONDS", "60"))
+
+# 定时抓行情的间隔（分钟）。0 = 关闭进程内定时任务。
+# 这就是 README「后端定时抓行情，持仓浮盈自动更新」那句话的开关：
+# 关掉之后仍然可以手动调 `manage.py refresh_quotes` 或让客户端带 refresh=1。
+# 免 Key 的免费源不适合按秒轮询，默认给一个偏保守的 15 分钟。
+QUOTE_REFRESH_MINUTES = int(os.getenv("QUOTE_REFRESH_MINUTES", "15"))

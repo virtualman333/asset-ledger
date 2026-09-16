@@ -1,5 +1,3 @@
-from datetime import timedelta
-
 from django.conf import settings
 from django.utils import timezone
 from rest_framework import status
@@ -8,12 +6,16 @@ from rest_framework.views import APIView
 
 from apps.assets.models import Asset
 
-from .models import FxRate, PriceQuote
-from .services import fetch_fx, fetch_quote
+from .models import FxRate
+from .services import fetch_fx, refresh_quote
 
 
 class QuoteView(APIView):
-    """批量行情。默认走缓存，refresh=1 强制抓取。"""
+    """批量行情。默认走缓存，refresh=1 强制抓取。
+
+    抓取与落库都交给 `services.refresh_quote()`（唯一一处写 PriceQuote 的代码），
+    这里只负责拼响应 —— 缓存判据写两份就一定会漂。
+    """
 
     def get(self, request):
         raw = request.query_params.get("asset_ids", "")
@@ -22,25 +24,11 @@ class QuoteView(APIView):
         if not ids:
             return Response({"results": []})
 
-        cache_cut = timezone.now() - timedelta(seconds=settings.QUOTE_CACHE_SECONDS)
         assets = Asset.objects.filter(id__in=ids)
         result = []
         for asset in assets:
-            latest = PriceQuote.objects.filter(asset=asset).order_by("-fetched_at").first()
-            quote = latest
-            stale = False
-            if force or not latest or latest.fetched_at < cache_cut:
-                data = fetch_quote(asset)
-                if data:
-                    quote = PriceQuote.objects.create(
-                        asset=asset,
-                        price=data["price"],
-                        currency=data.get("currency") or asset.currency,
-                        change_pct=data.get("change_pct"),
-                        source=data.get("source", ""),
-                    )
-                else:
-                    stale = True
+            refreshed = refresh_quote(asset, force=force)
+            quote = refreshed.quote
             if not quote:
                 result.append({"asset_id": asset.id, "symbol": asset.symbol, "name": asset.name, "price": None, "stale": True, "source": ""})
                 continue
@@ -54,7 +42,7 @@ class QuoteView(APIView):
                     "change_pct": str(quote.change_pct) if quote.change_pct is not None else None,
                     "fetched_at": quote.fetched_at.isoformat(),
                     "source": quote.source,
-                    "stale": stale,
+                    "stale": refreshed.stale,
                 }
             )
         return Response({"results": result})

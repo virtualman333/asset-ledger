@@ -23,6 +23,7 @@ from .dividend_income import (
     sum_by_currency,
     within_window,
 )
+from .valuation import is_fx_missing, terminal_value, valuate_positions, valuation_note
 
 ZERO = Decimal("0")
 
@@ -228,38 +229,46 @@ def build_summary(user, base: str | None = None) -> dict:
     base = base or settings.BASE_CURRENCY
     positions = build_positions(user)
     total_cost = ZERO
-    total_value = ZERO
     total_realized = ZERO
-    total_unrealized = ZERO
-    fx_warning = False
+
+    # 一次请求里同币种只算一次汇率：get_rate 查不到当日记录会去现抓，
+    # 按持仓数重复调用等于把网络请求翻了倍。
+    rate_cache: dict[str, Decimal] = {}
+
+    def rate_of(currency: str | None) -> Decimal:
+        key = currency or base
+        if key not in rate_cache:
+            rate_cache[key] = get_rate(key, base)
+        return rate_cache[key]
 
     for pos in positions:
-        currency = pos["currency"] or base
-        rate = get_rate(currency, base)
-        if currency != base and rate == 1:
-            fx_warning = True
+        rate = rate_of(pos["currency"] or base)
         total_cost += Decimal(pos["cost_basis"]) * rate
         total_realized += Decimal(pos["realized_pnl"]) * rate
-        if pos["market_value"]:
-            total_value += Decimal(pos["market_value"]) * rate
-            total_unrealized += Decimal(pos["unrealized_pnl"]) * rate
+
+    # 估值（含「哪些持仓拿不到报价」）只在 valuation 这个纯函数里判一次，
+    # 汇总字段与 XIRR 终值共用同一个结果 —— 不许各算一遍。
+    valuation = valuate_positions(positions, base, rate_of)
+    total_value = valuation["market_value"]
+    total_unrealized = valuation["unrealized_pnl"]
+    fx_warning = bool(valuation["fx_missing"])
 
     dividend_rows = dividend_entries(user)
     dividend_total = ZERO
     for currency, amount in sum_by_currency(dividend_rows).items():
-        rate = get_rate(currency or base, base)
-        if (currency or base) != base and rate == 1:
+        rate = rate_of(currency or base)
+        if is_fx_missing(currency, base, rate):
             fx_warning = True
         dividend_total += amount * rate
 
     annual_total = ZERO
     for entry in within_window(dividend_rows, timezone.localdate(), ANNUAL_WINDOW_DAYS):
-        annual_total += entry.amount * get_rate(entry.currency or base, base)
+        annual_total += entry.amount * rate_of(entry.currency or base)
 
     flows: list[tuple[date, float]] = []
     deposits = Transaction.objects.filter(user=user, side__in=("DEPOSIT", "WITHDRAW")).values_list("traded_at", "amount", "currency")
     for traded_at, amount, currency in deposits:
-        rate = get_rate(currency, base)
+        rate = rate_of(currency)
         flows.append((traded_at.date(), -float(Decimal(amount) * rate)))
     # 股息是投资者实实在在收到的现金，必须作为正现金流进 XIRR —— 它不在市值里
     # （除非分红再投），漏掉就等于把年化收益率算低。日期未知的股息不进现金流：
@@ -267,10 +276,14 @@ def build_summary(user, base: str | None = None) -> dict:
     for entry in dividend_rows:
         if entry.pay_date is None or entry.amount == ZERO:
             continue
-        rate = get_rate(entry.currency or base, base)
+        rate = rate_of(entry.currency or base)
         flows.append((entry.pay_date, float(entry.amount * rate)))
-    if total_value:
-        flows.append((timezone.localdate(), float(total_value)))
+    # 终值必须走 terminal_value：它把「有数量但拿不到报价」的持仓按成本算进来。
+    # 以前这里是 `if total_value:`（只看有报价的市值），于是持仓拿不到价时
+    # 终值凭空消失，年化把「本金还在」算成「本金没了」。
+    terminal = terminal_value(valuation)
+    if terminal:
+        flows.append((timezone.localdate(), float(terminal)))
     annualized = xirr(flows) if len(flows) >= 2 else None
 
     yield_value = dividend_yield(annual_total, total_cost)
@@ -279,6 +292,10 @@ def build_summary(user, base: str | None = None) -> dict:
     return {
         "base_currency": base,
         "market_value": str(total_value),
+        # 「有数量但拿不到报价」的那部分成本（已折算到基准货币）。
+        # 与 market_value 分开报，页面才能说清「总资产为什么不是 0」。
+        "unpriced_cost_basis": str(valuation["unpriced_cost_basis"]),
+        "unpriced_symbols": valuation["unpriced_symbols"],
         "cost_basis": str(total_cost),
         "unrealized_pnl": str(total_unrealized),
         "realized_pnl": str(total_realized),
@@ -289,7 +306,9 @@ def build_summary(user, base: str | None = None) -> dict:
         "monthly_passive_income": str(monthly) if monthly is not None else None,
         "total_pnl": str(total_unrealized + total_realized + dividend_total),
         "annualized": annualized,
-        "annualized_note": None if annualized is not None else "现金流不足或日期过于集中，暂无法计算年化",
+        # 一句话解释上面的数字：估值有没有缺口、年化为什么算不出来。
+        # 它由 valuation_note 统一生成 —— 别在这里另写一套文案。
+        "valuation_note": valuation_note(valuation, annualized),
         "fx_warning": fx_warning,
         "position_count": len(positions),
     }

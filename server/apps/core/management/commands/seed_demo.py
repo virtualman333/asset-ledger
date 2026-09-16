@@ -12,8 +12,7 @@ from apps.accounts.models import Account
 from apps.analytics.services import build_positions, build_summary
 from apps.assets.models import Asset
 from apps.core.models import Market, TxSide
-from apps.market.models import PriceQuote
-from apps.market.services import fetch_quote
+from apps.market.services import refresh_quote
 from apps.transactions.models import DividendRecord, Transaction
 
 User = get_user_model()
@@ -87,16 +86,12 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS("已写入演示流水"))
 
         for asset in assets.values():
-            data = fetch_quote(asset)
-            if data:
-                PriceQuote.objects.create(
-                    asset=asset,
-                    price=data["price"],
-                    currency=data.get("currency") or asset.currency,
-                    change_pct=data.get("change_pct"),
-                    source=data.get("source", ""),
-                )
-                self.stdout.write(f"行情 {asset.symbol}: {data['price']} {data.get('currency')} ({data.get('source')})")
+            # 落库交给 refresh_quote（唯一一处写 PriceQuote 的代码），
+            # 别再抄一份 create —— 抄出来的那份不会跟随缓存判据一起改。
+            refreshed = refresh_quote(asset, force=True)
+            quote = refreshed.quote
+            if refreshed.fetched and quote:
+                self.stdout.write(f"行情 {asset.symbol}: {quote.price} {quote.currency} ({quote.source})")
             else:
                 self.stdout.write(self.style.WARNING(f"行情抓取失败：{asset.symbol}（外网不可达时会走缓存兜底）"))
 

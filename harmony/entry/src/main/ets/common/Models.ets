@@ -16,14 +16,20 @@ export interface Position {
 
 export interface Summary {
   base_currency: string;
+  /** 只含**拿到报价**的持仓。拿不到报价的那部分在 unpriced_cost_basis 里 */
   market_value: string;
+  /** 有数量但拿不到报价的持仓成本（已折算到基准货币） */
+  unpriced_cost_basis: string;
+  /** 上面那些持仓的标的代码，用来告诉用户是哪几个 */
+  unpriced_symbols: string[];
   cost_basis: string;
   unrealized_pnl: string;
   realized_pnl: string;
   dividend_total: string;
   total_pnl: string;
   annualized: number;
-  annualized_note: string;
+  /** 一句话解释上面的数字：估值有没有缺口、年化为什么算不出来。null 表示一切正常 */
+  valuation_note: string;
   fx_warning: boolean;
   position_count: number;
 }
