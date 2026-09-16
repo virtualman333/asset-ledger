@@ -7,14 +7,16 @@ from rest_framework.views import APIView
 from apps.assets.models import Asset
 
 from .models import FxRate
-from .services import fetch_fx, refresh_quote
+from .services import fetch_fx, refresh_quote_map
 
 
 class QuoteView(APIView):
     """批量行情。默认走缓存，refresh=1 强制抓取。
 
-    抓取与落库都交给 `services.refresh_quote()`（唯一一处写 PriceQuote 的代码），
-    这里只负责拼响应 —— 缓存判据写两份就一定会漂。
+    抓取与落库都交给 `services.refresh_quote_map()`（唯一一处抓行情并写 PriceQuote 的
+    代码），这里只负责拼响应 —— 缓存判据写两份就一定会漂。
+    顺便：它也是**批量**取价的 —— 一次 asset_ids 里的 A/港/美标的合成一条腾讯请求，
+    而不是一只一条（见 `services.fetch_quotes`）。
     """
 
     def get(self, request):
@@ -24,11 +26,13 @@ class QuoteView(APIView):
         if not ids:
             return Response({"results": []})
 
-        assets = Asset.objects.filter(id__in=ids)
+        assets = list(Asset.objects.filter(id__in=ids))
+        refreshed, _requests, _batches = refresh_quote_map(assets, force=force)
+
         result = []
         for asset in assets:
-            refreshed = refresh_quote(asset, force=force)
-            quote = refreshed.quote
+            one = refreshed[asset.id]
+            quote = one.quote
             if not quote:
                 result.append({"asset_id": asset.id, "symbol": asset.symbol, "name": asset.name, "price": None, "stale": True, "source": ""})
                 continue
@@ -42,7 +46,7 @@ class QuoteView(APIView):
                     "change_pct": str(quote.change_pct) if quote.change_pct is not None else None,
                     "fetched_at": quote.fetched_at.isoformat(),
                     "source": quote.source,
-                    "stale": refreshed.stale,
+                    "stale": one.stale,
                 }
             )
         return Response({"results": result})

@@ -11,12 +11,21 @@
   - 调度器起不来、以及 `stop()` 时都必须放锁，否则这个进程死了别人也拿不到。
 
 只用到 `django.conf.settings.configure`：不碰 app registry、不连库。
+本机没装 Django 时**整条跳过**，不报 ERROR —— README 明确承诺过
+`python -m unittest discover -s apps -t .` 这套测试不需要 Django。
 """
 import sys
 import unittest
 from unittest import mock
 
-from django.conf import settings as dj_settings
+try:
+    from django.conf import settings as dj_settings
+except ImportError:  # 没装 Django 就跳过这一条，别让整轮测试变成 FAILED
+    raise unittest.SkipTest(
+        "本机没装 Django：这一条测的是 scheduler.autostart 的接线行为，"
+        "它要 django.conf.settings.configure。装上 requirements 之后会真的跑；"
+        "其余模块都不需要 Django。"
+    ) from None
 
 if not dj_settings.configured:
     dj_settings.configure(QUOTE_REFRESH_MINUTES=15, QUOTE_REFRESH_LOCK="/nonexistent/x.lock")

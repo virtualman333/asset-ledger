@@ -37,13 +37,14 @@
 
 ### 行情是怎么更新的（写入口也只有一个）
 
-写 `PriceQuote`（行情快照）的地方只有一处：**`server/apps/market/services.py` 的 `refresh_quote()`**。
-它同时负责「缓存期内直接复用」的判据，三种触发方式都调它：
+写 `PriceQuote`（行情快照）的地方只有一处：**`server/apps/market/services.py`** 的
+`refresh_quote_map()`（单只的情形走 `refresh_quote()`，两者共用同一份「查缓存 → 取价 → 落库」）。
+它同时负责「缓存期内直接复用」的判据，三种触发方式都从这里进：
 
 | 触发方式 | 场景 |
 | --- | --- |
 | 进程内定时任务（APScheduler） | 默认行为，`QUOTE_REFRESH_MINUTES` 决定间隔，默认 15 分钟；`0` 表示关闭 |
-| `python manage.py refresh_quotes [--force]` | 不想在服务进程里挂线程时，交给 cron / 宝塔计划任务 |
+| `python manage.py refresh_quotes [--force] [--batch-size N]` | 不想在服务进程里挂线程时，交给 cron / 宝塔计划任务 |
 | `GET /market/quotes/?asset_ids=1,2&refresh=1` | 端上主动拉一次（客户端当前不调，保留给调试与将来的下拉刷新） |
 
 **一台机器上只有一个进程会真的去抓。** 判据分两层：
@@ -66,6 +67,33 @@
 此后 8 小时一格没动；没跑过演示数据的账号则连一条都没有，现价恒为空、总资产恒 `0.00`。
 所以现在「定时任务真的存在」「写入口只有一处」「多 worker 也只起一个」都各有一条单测锁着
 （`apps/market/tests/test_quote_schedule.py`、`test_quote_lock.py`、`test_scheduler_autostart.py`）。
+
+**一轮的请求条数才是限流的实际口径，所以 A 股 / 港股 / 美股是合并成一条请求抓的。**
+腾讯接口本来就吃逗号分隔的多代码（`q=sh600000,sz000001,hk00700,usAAPL,sh000001`，
+实测一条请求 0.16 秒回来 5 行），而在这之前是**逐只请求**：60 只标的一轮 60 条，
+多机部署再乘一遍 —— 正是下面那句「轮询太快会被源限流」所预告的压力，等于自己撞上去。
+现在每 60 个代码一条请求（`--batch-size 1` 可退回逐只，排查用），其余市场逐只问各自的源。
+这一轮真的发了几条 HTTP 会出现在日志与命令输出里：
+
+```
+python manage.py refresh_quotes
+行情刷新：成功 8、缓存内跳过 0、失败 1（HTTP 3 次，分 1 批）
+```
+
+代码规范化与批量解析单独放在 `apps/market/tencent.py`（纯函数，不 import django，
+于是「一批只发一条请求」可以离线断言）。腾讯接口有三个实测出来的坑写在那儿的模块说明里：
+
+- **区分大小写**：`usAAPL` 有价，`usaapl` / `usAaPl` / `HK00700` / `SH600000` 一律返回
+  `v_pv_none_match="1";` —— 不是 404、不是报错行，就是没这只标的。
+- **认不出的代码整行不出现**，所以只能按行自己带的代码回填，照着请求顺序对齐必然错位。
+- **全不认时回来的是唯一一行兜底**（`v_pv_none_match`），它不是标的。
+
+`USB`（美国合众银行）这种**本身就带 `us` 两个字母**的真实代码是前两条的交汇点：它和
+「`us` 前缀 + ticker `B`」在字符串上无法区分。所以规则是：`us`/`US` 后面接**全大写且 ≥2 位**
+才当前缀（`usAAPL`、`USAAPL`、`usBRK.B`），其余当裸 ticker（`USB` → `usUSB`），
+两头都不像的（`usaapl`、`usB`）返回 `None` 并记一条 warning ——
+**少一个价，好过悄悄记一个错价。** 改动之前这两个写法都会被整串 `lower()`：
+`usAAPL` → `usaapl`、`USB` → `usb`，两个都是查不到、也不报错的代码。
 
 
 ## 技术栈
@@ -145,6 +173,16 @@ python -m unittest discover -s apps -t .
 它的断言刻意落在真实的 OS 锁状态上（抢两次、放一次再抢、真开三个进程同时抢），
 因为这条判据唯一会错的方式就是「以为排他了，其实没有」—— 注入假锁只能测出「有没有调用」。
 
+行情代码的规范化与批量解析（`apps/market/tencent.py`）同理不 import django：
+上面说的那三条接口坑（区分大小写、认不出的行不出现、兜底行不是标的）写错了都只表现为
+**静默少一个价**，所以样本直接用真实响应原文（`tests/tencent_fixtures.py`），
+并且「一批只发一条请求」是靠**注入假传输数它被调了几次**来断言的，不出网、秒级。
+
+唯一的例外是 `apps/market/tests/test_scheduler_autostart.py`：它要
+`django.conf.settings.configure` 才能把 `autostart()` 真调起来。**没装 Django 时它整条跳过**
+（报告里是 `OK (skipped=1)`，不是 `FAILED`），装上 `requirements.txt` 之后会真的跑 ——
+上面那条命令的承诺是「不需要 Django 也能跑」，跳过才对得起这句话。
+
 ### 流水的现金变动（`amount`）
 
 `amount` = 账户现金变动，**正数 = 资金流入、负数 = 资金流出**（已含 `fee` / `tax`）。
@@ -223,6 +261,9 @@ GET  /api/v1/analytics/positions|summary|dividends|calendar
 - 美股行情延迟约 15 分钟（腾讯/Yahoo 免费源），需要实时行情请接付费源
 - 免费源没有推送，只能按 `QUOTE_REFRESH_MINUTES` 轮询（默认 15 分钟）；轮询太快会被源限流，
   拿不到价时会退回上一次的旧价并把 `stale` 标出来，不会写空记录
+- 一轮的请求条数才是限流的实际口径：A 股 / 港股 / 美股**合并成一条请求**（每 60 个代码一条，
+  腾讯接口本身支持多代码），其余市场逐只问各自的源。`manage.py refresh_quotes` 会把这一轮
+  真的发了几条 HTTP 打出来
 - **多 worker 部署**（`gunicorn -w 4`）时只有抢到文件锁的那一个 worker 会真的抓行情，
   其余进程只跑 Web 请求 —— 这是刻意的，否则每轮会被放大成 N 遍。
   多机部署时每台机器各有一个调度器（锁是**本机**的，别放到网络盘上）

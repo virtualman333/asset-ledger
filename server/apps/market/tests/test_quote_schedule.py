@@ -135,9 +135,45 @@ class WiringTest(unittest.TestCase):
         self.assertEqual(hits, ["market/services.py"])
 
     def test_接口不再自己算缓存判据(self):
-        source = (APP_DIR / "views.py").read_text(encoding="utf-8")
-        self.assertIn("refresh_quote(", source)
+        """★ 必须先剥注释/文档字符串再断言。
+
+        第一版忘了剥，于是 `views.py` 的文档字符串里那句
+        「都交给 `services.refresh_quote_map()`」让这条锁**永远为真** ——
+        把调用整行删掉它都不红（负向验证第 10 项当场抓出来的）。
+        """
+        source = strip_comments((APP_DIR / "views.py").read_text(encoding="utf-8"))
+        self.assertIn("refresh_quote_map(", source)
         self.assertNotIn("QUOTE_CACHE_SECONDS", source)
+        # 也不许自己出网：取价（含批量拼 URL）都在 services 里
+        self.assertNotIn("requests.get", source)
+
+    def test_批量取价只有一处实现(self):
+        """3 只标的以前是 3 条请求 —— 腾讯接口本来就吃逗号分隔的多代码。
+
+        行为版的证据在 `test_tencent.py`（注入假传输数请求次数）；这里盯接线：
+        服务层真的走 `tencent.fetch_all`，且拼 URL 这件事只有一处。
+        """
+        source = strip_comments((APP_DIR / "services.py").read_text(encoding="utf-8"))
+        self.assertIn("tencent.fetch_all(", source, "批量取价被改回逐只了？")
+        self.assertIn("tencent.group_by_code(", source)
+        self.assertIn("tencent.tencent_code(", source)
+        self.assertEqual(source.count("tencent.batch_url("), 1, "拼 URL 的地方只能有一处")
+
+    def test_服务层不自己抄一份市场清单(self):
+        # 市场取值只有一份（tencent.TENCENT_MARKETS），抄一遍就会漂
+        source = strip_comments((APP_DIR / "services.py").read_text(encoding="utf-8"))
+        self.assertIn("tencent.TENCENT_MARKETS", source)
+        self.assertNotIn('("A", "HK", "US")', source)
+
+    def test_出网只有一处(self):
+        """所有数据源都走 `_http_get`。
+
+        否则「这一轮发了几条 HTTP」这个数就只数到一部分 —— 日志里报 1 次、
+        实际出去 3 次，正是这个仓库最讨厌的那种「数字悄悄错了」。
+        """
+        source = strip_comments((APP_DIR / "services.py").read_text(encoding="utf-8"))
+        self.assertIn("def _http_get(", source)
+        self.assertEqual(source.count("requests.get"), 1, "除 _http_get 之外不许直接 requests.get")
 
     def test_ready里真的接了定时任务(self):
         # README 那句「后端定时抓行情」的落点就是这里，拆掉就退回原状

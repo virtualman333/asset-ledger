@@ -27,12 +27,21 @@ _lock = None  # 跨进程锁（quote_lock.QuoteLock）
 
 
 def refresh_quotes_job():
-    """定时任务真正干的事：抓一轮行情并落库。"""
+    """定时任务真正干的事：抓一轮行情并落库。
+
+    日志里带 HTTP 次数与批数：这是「一批只请求一次」有没有生效的唯一现场证据，
+    也是 README 那句「轮询太快会被源限流」能不能被看出来的地方。
+    """
     from .services import refresh_quotes
 
     stats = refresh_quotes()
     logger.info(
-        "行情刷新：成功 %s、缓存内跳过 %s、失败 %s", stats["fetched"], stats["skipped"], stats["failed"]
+        "行情刷新：成功 %s、缓存内跳过 %s、失败 %s（HTTP %s 次，分 %s 批）",
+        stats["fetched"],
+        stats["skipped"],
+        stats["failed"],
+        stats["requests"],
+        stats["batches"],
     )
     return stats
 
