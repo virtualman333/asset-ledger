@@ -173,6 +173,9 @@ class ConfirmView(APIView):
             "side": data.get("side"),
             "quantity": data.get("quantity"),
             "price": data.get("price"),
+            # 金额必须透传：出入金没有数量×单价可推，漏掉这一行就等于把用户
+            # 在草稿里（或 overrides 里）补的金额直接丢掉。
+            "amount": data.get("amount"),
             "fee": data.get("fee") or 0,
             "tax": data.get("tax") or 0,
             "currency": data.get("currency") or asset.currency,

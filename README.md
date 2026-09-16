@@ -88,10 +88,26 @@ python scripts/smoke_record_flow.py     # 覆盖鸿蒙「记一笔」页：标�
 
 ```bash
 cd server
-python -m unittest discover -s apps/analytics/tests -t .
+python -m unittest discover -s apps -t .
 ```
 
-股息口径的归集规则（`apps/analytics/dividend_income.py`）刻意不 import django，就是为了让这条最影响账目、又最容易写错的规则能被秒级验证。
+两条最容易写错、又最影响账目的规则刻意不 import django，就是为了让它们能被秒级验证：股息归集（`apps/analytics/dividend_income.py`）与流水金额口径（`apps/transactions/amount_rules.py`）。
+
+这两处出错的方式都是**静默**的：前者会让同一笔股息算两遍，后者会让一笔入金记成 0 —— 界面上都看不出异常，只有数字悄悄错了。
+
+### 流水的现金变动（`amount`）
+
+`amount` = 账户现金变动，**正数 = 资金流入、负数 = 资金流出**（已含 `fee` / `tax`）。
+推导与符号归一只有一处：`server/apps/transactions/amount_rules.py`。
+
+| side | 没给 `amount` | 给了 `amount` |
+| --- | --- | --- |
+| `BUY` | `−(数量×单价 + fee + tax)` | 原样 |
+| `SELL` / `DIVIDEND` / `FEE` / `TAX` | `数量×单价 − fee − tax` | 原样 |
+| `SPLIT` | `0`（拆股不产生现金变动） | 原样 |
+| `DEPOSIT` / `WITHDRAW` | **回 400**（没有数量×单价可推） | 按 side 归一符号；为 0 也回 400 |
+
+出入金为什么必须显式给金额：它是 XIRR 现金流的两端，而「猜」出来的 0 会让这笔钱在年化里凭空消失、且全程不报错。方向由 `side` 唯一决定，所以 `amount` 只表达大小 —— 「出金 50000」填成正数也会被归一为 `−50000`。
 
 演示账号：`demo / demo12345`
 

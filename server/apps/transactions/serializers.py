@@ -1,7 +1,6 @@
-from decimal import Decimal
-
 from rest_framework import serializers
 
+from .amount_rules import AmountError, resolve_amount
 from .models import DividendRecord, Transaction
 
 
@@ -29,24 +28,25 @@ class TransactionSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         side = attrs.get("side")
-        quantity = attrs.get("quantity") or Decimal("0")
-        price = attrs.get("price") or Decimal("0")
-        amount = attrs.get("amount")
-        fee = attrs.get("fee") or Decimal("0")
-        tax = attrs.get("tax") or Decimal("0")
 
         if side in ("BUY", "SELL") and not attrs.get("asset"):
             raise serializers.ValidationError({"asset": "买卖必须指定标的"})
 
-        if amount is None:
-            gross = quantity * price
-            if side == "BUY":
-                amount = -(gross + fee + tax)
-            elif side == "SELL":
-                amount = gross - fee - tax
-            else:
-                amount = gross - fee - tax
-            attrs["amount"] = amount
+        # 现金变动的口径只有一处（`amount_rules.resolve_amount`）。这里不再自己推导 ——
+        # 原先那条 `else` 分支把「入金 / 出金 / 拆分」和买入卖出算成同一件事，于是
+        # 一笔入金的金额静默变成 0（详见该模块 docstring）。
+        try:
+            attrs["amount"] = resolve_amount(
+                side,
+                quantity=attrs.get("quantity"),
+                price=attrs.get("price"),
+                fee=attrs.get("fee"),
+                tax=attrs.get("tax"),
+                amount=attrs.get("amount"),
+            )
+        except AmountError as exc:
+            # 「入金没填金额」是用户补一下就能解决的事，回 400 而不是 500
+            raise serializers.ValidationError({"amount": str(exc)}) from exc
         return attrs
 
     def create(self, validated_data):

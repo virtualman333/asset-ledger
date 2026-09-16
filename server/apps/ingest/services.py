@@ -27,6 +27,7 @@ price: 单价（数字）
 fee: 手续费（数字，没有就 0）
 tax: 税费（数字，没有就 0）
 currency: CNY/USD/HKD/USDT 等
+amount: 现金变动金额（数字，不带货币符号；账户进钱为正、出钱为负）——买入填负数、卖出填正数、入金填正数、出金填负数；不确定就留空
 traded_at: ISO8601 时间，含时区
 account_hint: 券商或账户名，可为空
 confidence: 0-1 的置信度
@@ -45,6 +46,7 @@ def classify_schema() -> dict:
         "fee": 0,
         "tax": 0,
         "currency": "CNY",
+        "amount": None,
         "traded_at": None,
         "account_hint": "",
         "confidence": 0,
@@ -104,7 +106,7 @@ def extract_from_text(text: str) -> tuple[dict, str]:
 def _normalize(data: dict) -> dict:
     base = classify_schema()
     base.update({k: v for k, v in data.items() if k in base})
-    for key in ("quantity", "price", "fee", "tax"):
+    for key in ("quantity", "price", "fee", "tax", "amount"):
         value = base.get(key)
         if value in (None, ""):
             continue
@@ -130,6 +132,18 @@ def rule_extract(text: str) -> dict:
         result["side"] = "SELL"
     elif "分红" in lowered or "派息" in lowered or "股息" in lowered:
         result["side"] = "DIVIDEND"
+    elif "入金" in lowered or "转入" in lowered or "充值" in lowered:
+        result["side"] = "DEPOSIT"
+    elif "出金" in lowered or "转出" in lowered or "提现" in lowered:
+        result["side"] = "WITHDRAW"
+
+    if result["side"] in ("DEPOSIT", "WITHDRAW"):
+        # 出入金没有标的、数量、单价。金额猜错就是一笔错账，而它又是年化现金流
+        # 的唯一来源 —— 所以这里只认方向，金额留给用户补（确认入账时缺金额会
+        # 明确回 400，而不是像以前那样静默记成 0）。
+        result["confidence"] = 0.3
+        result["missing"] = [k for k in ("amount", "traded_at") if not result.get(k)]
+        return result
 
     # 中文与数字同属 \w，\b 不生效，必须用前后断言
     symbol = re.search(r"(?<!\d)(\d{6})(?!\d)", lowered) or re.search(r"\b([A-Z]{1,5})\b", text)

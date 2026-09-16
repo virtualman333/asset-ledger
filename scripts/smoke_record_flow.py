@@ -87,6 +87,15 @@ def main():
         })
         check(f"{side} 入账", r.status_code in (200, 201), r.text[:200])
 
+    # 5.1) 出入金**不带金额**必须被明确拒绝。这条路径以前会静默记成 amount=0，
+    #      而 0 元的入金在 XIRR 里等于这笔钱从未投入 —— 不报错，界面上也看不出来。
+    r = s.post(f"{BASE}/transactions/records/", json={
+        "account": aid, "asset": None, "side": "DEPOSIT",
+        "currency": "CNY", "traded_at": "2026-09-01T09:30:00",
+        "client_request_id": "harmony-deposit-noamount-1",
+    })
+    check("出入金缺金额被拒（而不是静默记成 0）", r.status_code == 400, r.text[:200])
+
     # 6) 持仓推导
     r = s.get(f"{BASE}/analytics/positions/")
     check("持仓推导", r.status_code == 200, r.text[:200])
