@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""API 冒烟测试：跑通注册 → 记账 → 行情 → 统计 → Agent 文本识别全链路。
+"""API 冒烟测试：跑通注册 → 记账 → 行情 → 统计 → Agent 文本识别 → 导出 CSV 全链路。
 
 跑法（**默认自启一个只服务当前代码的服务端**，跑完关掉）：
 
@@ -15,13 +15,23 @@
 import json
 import sys
 import time
+from pathlib import Path
 
 import requests
 
 from _smoke_lib import Report, run
 
+#: 列定义直接从服务端那份纯模块读（`export_rules` 只 import 标准库，不需要 Django）。
+#: **不在脚本里抄第二份列清单** —— 抄一份就等于把「列有没有变」这件事交给运气。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+from apps.transactions.export_rules import CSV_COLUMNS  # noqa: E402
+
 USERNAME = "smoke_user"
 PASSWORD = "smoke12345"
+
+#: 导出用例用的日期：远期，避免与别的用例抢数据；入金不需要标的与数量单价
+EXPORT_FROM = EXPORT_TO = "2027-01-01"
+EXPORT_ROW = "2027-01-01 10:00:00,入金,,,冒烟账户,,,4321.5,0,0,CNY,1,手动,'=1+1"
 
 
 def auth(token: str) -> dict:
@@ -124,6 +134,85 @@ def body(base: str, report: Report) -> None:
         check("草稿确认入账", r.status_code == 201, r.text[:200])
     else:
         report.skip("草稿确认入账", "草稿未识别成功（无 LLM Key 时属预期）")
+
+    # 9. 导出 CSV —— 真发一次请求，看整条线（路由 → 复用列表的筛选 → 渲染 → 响应头）
+    #    备注刻意写成公式：Excel 打开时会被当公式执行的那一类文本。
+    r = session.post(
+        f"{base}/transactions/records/",
+        json={
+            "account": account_id, "side": "DEPOSIT", "amount": "4321.50", "currency": "CNY",
+            "traded_at": f"{EXPORT_FROM}T10:00:00+08:00", "client_request_id": "smoke-export-0001",
+            "note": "=1+1",
+        },
+        headers=headers,
+    )
+    check("导出前的入金流水（备注故意写成公式）", r.status_code in (200, 201), r.text[:160])
+
+    r = session.get(
+        f"{base}/transactions/records/export/",
+        params={"from": EXPORT_FROM, "to": EXPORT_TO}, headers=headers,
+    )
+    # 这一条同时钉住「路由没被 records/{pk}/ 吃掉」：排错位置的话 `export` 会被当成主键，是 500
+    check("导出 CSV 返回 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
+    check("Content-Type 是 text/csv", r.headers.get("Content-Type", "").startswith("text/csv"),
+          str(r.headers.get("Content-Type")))
+    disposition = r.headers.get("Content-Disposition") or ""
+    check("Content-Disposition 带中文名（响应头没因为非 latin-1 炸掉）",
+          "filename*=UTF-8''" in disposition, disposition)
+
+    text = r.text
+    check("CSV 以 UTF-8 BOM 开头（否则 Excel 拿 GBK 解，中文列头变乱码）",
+          text.startswith("\ufeff"), repr(text[:30]))
+
+    lines = [ln for ln in text.split("\r\n") if ln != ""]
+    check("列头与服务端 export_rules.CSV_COLUMNS 逐字一致",
+          bool(lines) and lines[0].lstrip("\ufeff") == ",".join(t for _, t in CSV_COLUMNS),
+          repr(lines[:1]))
+    check("按日期筛出来恰好 1 条 —— 导出复用了列表的筛选，不是另起一套查询",
+          len(lines) == 2, f"数据行 {max(len(lines) - 1, 0)} 条：{text[:200]}")
+    check(
+        "整行内容正确（时间按 Asia/Shanghai 落地、金额十进制、备注里的 =1+1 被中和）",
+        len(lines) == 2 and lines[1] == EXPORT_ROW,
+        f"实际：{lines[1] if len(lines) > 1 else '(没有数据行)'}",
+    )
+
+    # 筛选三件套：filter / search 各来一次，都要在导出上生效
+    r = session.get(f"{base}/transactions/records/export/", params={"side": "SPLIT"}, headers=headers)
+    split_lines = [ln for ln in r.text.split("\r\n") if ln != ""]
+    check("导出认 side 筛选（SPLIT 一条都没有 → 只剩列头）",
+          r.status_code == 200 and len(split_lines) == 1,
+          f"{r.status_code} 行数={len(split_lines)}：{r.text[:160]}")
+
+    r = session.get(f"{base}/transactions/records/export/", params={"search": "601398"}, headers=headers)
+    hit_lines = [ln for ln in r.text.split("\r\n") if ln != ""][1:]
+    check("导出认 search 筛选（命中行都含 601398）",
+          r.status_code == 200 and bool(hit_lines) and all("601398" in ln for ln in hit_lines),
+          f"{r.status_code}：{hit_lines[:2]}")
+
+    # 10. 日期区间筛选在**列表**上也要真的生效。
+    #     这一段原先用 `traded_at__date`，在没装时区表的 MySQL 上恒返回 0 条且不报错 ——
+    #     所以这里不能只测导出，得连列表一起测：两处共用同一个 get_queryset()。
+    r = session.get(
+        f"{base}/transactions/records/",
+        params={"from": EXPORT_FROM, "to": EXPORT_TO}, headers=headers,
+    )
+    rows = report.field(r.json(), "results", []) or []
+    check("列表按日期区间能查到那笔入金（不是恒空）",
+          r.status_code == 200 and any(
+              row.get("side") == "DEPOSIT" and str(row.get("amount", "")).startswith("4321.5")
+              for row in rows
+          ),
+          f"{r.status_code} 命中 {len(rows)} 条：{json.dumps(rows[:1], ensure_ascii=False)[:160]}")
+
+    r = session.get(f"{base}/transactions/records/", params={"from": "abc"}, headers=headers)
+    check("日期格式写错回 400（以前是 500）", r.status_code == 400, f"{r.status_code} {r.text[:160]}")
+
+    r = session.get(
+        f"{base}/transactions/records/export/",
+        params={"from": "2027-01-02", "to": "2027-01-01"}, headers=headers,
+    )
+    check("to 早于 from 回 400（导出与列表同一套判据）",
+          r.status_code == 400, f"{r.status_code} {r.text[:160]}")
 
 
 if __name__ == "__main__":

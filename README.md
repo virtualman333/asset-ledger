@@ -156,7 +156,7 @@ python manage.py refresh_quotes --force  # 忽略缓存，强制重抓
 冒烟测试（**默认自启一个只服务当前代码的服务端**，跑完关掉）：
 
 ```bash
-python scripts/smoke_api.py             # 覆盖注册→记账→行情→统计→Agent 识别→入账
+python scripts/smoke_api.py             # 覆盖注册→记账→行情→统计→Agent 识别→入账→导出 CSV
 python scripts/smoke_record_flow.py     # 覆盖鸿蒙「记一笔」页：标的自动建→买卖→股息→出入金→持仓推导→股息口径一致
 ```
 
@@ -266,6 +266,45 @@ python -m unittest discover -s apps -t .
 
 出入金为什么必须显式给金额：它是 XIRR 现金流的两端，而「猜」出来的 0 会让这笔钱在年化里凭空消失、且全程不报错。方向由 `side` 唯一决定，所以 `amount` 只表达大小 —— 「出金 50000」填成正数也会被归一为 `−50000`。
 
+### 导出流水（CSV）
+
+`GET /api/v1/transactions/records/export/` 把当前用户的流水导成 CSV，Excel / WPS 双击就能打开。
+
+**筛选条件与 `GET /transactions/records/` 完全一致**（`from` / `to` / `side` / `account` / `asset` / `currency` / `source` / `search` / `ordering` 都认）。这不是「抄一份查询」，导出直接复用列表那套：`TransactionExportView` 拿 `TransactionViewSet` 的 `get_queryset()` 再走它的 `filter_queryset()`，三个 filter 后端一个不落地都在。于是「列表里看到 12 笔、导出只有 9 笔」这种漂移在结构上就不可能发生 —— 用户在列表里数一遍、导出再数一遍对不上，只会以为「少记了几笔」，不会想到是导出的筛选没跟上。分页对导出不生效：列表一页 50 条，导出是**全部**命中的流水。
+
+`from` / `to` 写 `YYYY-MM-DD`，**两头都含当天**（`from=2027-01-01&to=2027-01-01` 就是那一天）；口径是「本地零点到次日零点」的半开区间，一天的宽度恰好 24 小时。日期写错、或者 `to` 早于 `from`，回 **400** 并把话说清楚。
+
+这两个参数以前是另一副样子，值得写下来：实现用的是 `traded_at__date`，在 `USE_TZ = True` + MySQL 上**恒返回 0 条**——Django 会生成 `CONVERT_TZ(col, 'UTC', 'Asia/Shanghai')`，而 MySQL 的时区表（`mysql.time_zone_name`）**默认没装**，`CONVERT_TZ` 于是返回 NULL：不报错，只是一条都选不出来。本机实测 `CONVERT_TZ` 返回 `NULL`、8 条流水里 `__date` 区间命中 **0** 条。也就是说这条接口在装了时区表的机器上是好的、在本机是恒空的，**两边都不报错**（`docs/DESIGN.md` 第 6 节从 M0 起就承诺了 `?from=&to=`，一直没落点）。现在改成「把本地零点折成带时区的瞬间」再比，不依赖数据库的时区表；日期写错也从**500 变成 400**。
+
+导出的列（顺序就是列序）：
+
+| 列 | 说明 |
+| --- | --- |
+| 时间 | 发生时间，按 `TIME_ZONE`（Asia/Shanghai）格式化成 `YYYY-MM-DD HH:MM:SS` |
+| 方向 | `side` 的中文名，取自模型自己的 `TextChoices` |
+| 标的代码 | `asset.symbol`；入金 / 出金这类没有标的的流水留空 |
+| 标的名称 | `asset.name` |
+| 账户 | `account.name` |
+| 数量 | `quantity` |
+| 单价 | `price` |
+| 现金变动 | `amount`（正数流入、负数流出，口径见上一节） |
+| 手续费 | `fee` |
+| 税费 | `tax` |
+| 币种 | `currency` |
+| 入账汇率 | `fx_rate` |
+| 来源 | `source` 的中文名（手动 / Agent 识别 / 导入） |
+| 备注 | `note` |
+
+这张表不是手抄完就算：`apps/core/tests/test_export_contract.py` 把它与 `apps/transactions/export_rules.py` 的 `CSV_COLUMNS` **双向**对齐 —— 少一列、多一列、顺序换了都红。改列就得同时改两处。
+
+三件已经替你处理掉的事。它们都不是口味问题，是「双击打开就知道了」：
+
+- **带 UTF-8 BOM、行尾 CRLF。** 不带 BOM 时 Excel 会拿 GBK 去解 UTF-8，中文列头变成乱码；CRLF 是 RFC 4180 的规定，也是 Excel 的默认。
+- **以 `=`、`+`、`-`、`@` 开头的单元格前面会多一个单引号。** 备注列来自手输与 Agent 对截图的识别，也就是说不完全由你掌控；不加这道处理，导出的文件在别人机器上打开就可能执行一段公式（DDE / 外部引用），而 CSV 本身看不出任何异常。代价是那一格会**多显示一个单引号**（`'=1+1`）—— 刻意的取舍，安全优先于好看。真正的负数（`-2500`）不受影响。
+- **文件名给两份。** `filename=` 是纯 ASCII 的（给旧客户端），`filename*=UTF-8''…` 是中文名（现代浏览器取这条）。HTTP 头的值只能是 latin-1，把中文名直接写进 `filename=` 会让 Django 编码响应头时抛异常 —— 用户看到的只是「点了导出没反应」。
+
+导出的内容**只有流水本身**：不导出原始凭证、不带 `client_request_id`，也不做任何聚合。股息明细的导出还没做（见路线图）。
+
 演示账号：`demo / demo12345`
 
 客户端：用 DevEco Studio 打开 `harmony/`，跑起来后在登录页填后端地址：
@@ -285,7 +324,8 @@ GET  /api/v1/auth/me/                              当前用户（需认证）
 GET  /api/v1/health/                               版本自证（源码指纹，无需认证）
 GET/POST /api/v1/accounts/                         账户
 GET/POST /api/v1/assets/                           标的
-GET/POST /api/v1/transactions/records/             流水（支持 client_request_id 幂等）
+GET/POST /api/v1/transactions/records/             流水（支持 client_request_id 幂等、from/to 日期区间）
+GET  /api/v1/transactions/records/export/          流水导出 CSV（筛选条件与列表一致）
 GET/POST /api/v1/transactions/dividends/           股息
 GET  /api/v1/market/quotes/?asset_ids=1,2&refresh=1 行情
 GET  /api/v1/market/fx/?base=USD&quote=CNY         汇率
@@ -329,7 +369,7 @@ GET  /api/v1/analytics/positions|summary|dividends|calendar
 - [x] M2 行情与收益：多源抓价、持仓、浮盈、XIRR 多币种折算
 - [x] M3 股息模块：股息记录、月度聚合、日历
 - [x] M4 Agent 链路：文本与截图识别 → 草稿箱 → 确认入账
-- [ ] M5 打磨：截图上传端上接入、图表、导出 CSV、通知、真机签名
+- [ ] M5 打磨：截图上传端上接入、图表、导出 CSV（**流水已支持**，股息待做）、通知、真机签名
 
 ## 已知约束
 
