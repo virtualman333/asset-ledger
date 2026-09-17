@@ -303,7 +303,37 @@ python -m unittest discover -s apps -t .
 - **以 `=`、`+`、`-`、`@` 开头的单元格前面会多一个单引号。** 备注列来自手输与 Agent 对截图的识别，也就是说不完全由你掌控；不加这道处理，导出的文件在别人机器上打开就可能执行一段公式（DDE / 外部引用），而 CSV 本身看不出任何异常。代价是那一格会**多显示一个单引号**（`'=1+1`）—— 刻意的取舍，安全优先于好看。真正的负数（`-2500`）不受影响。
 - **文件名给两份。** `filename=` 是纯 ASCII 的（给旧客户端），`filename*=UTF-8''…` 是中文名（现代浏览器取这条）。HTTP 头的值只能是 latin-1，把中文名直接写进 `filename=` 会让 Django 编码响应头时抛异常 —— 用户看到的只是「点了导出没反应」。
 
-导出的内容**只有流水本身**：不导出原始凭证、不带 `client_request_id`，也不做任何聚合。股息明细的导出还没做（见路线图）。
+导出的内容**只有流水本身**：不导出原始凭证、不带 `client_request_id`，也不做任何聚合。股息有一份单独的导出，见下一节。
+
+### 导出股息明细（CSV）
+
+`GET /api/v1/analytics/dividends/export/` 把当前用户的股息导成 CSV。`?year=2026` 与 `GET /analytics/dividends/` **同口径**（按派息日筛）；不传就是全部年份。`year` 写错回 **400**（以前是 500），解析只有一处（`services.parse_year`），免得「图表按 2026 筛、导出按别的东西筛」。
+
+**导的是「归集后的股息」，不是股息明细表。** 股息有两条合法录入路径（见第 20 行的「股息口径（只有一个）」）：走 `/transactions/dividends/` 的落一条明细，走 `/transactions/records/` 且 `side=DIVIDEND` 的**只落一条流水、没有明细**。所以「导出股息明细 = 把明细表列出来」这种最自然的写法会整条漏掉后一种 —— 而页面上的「累计股息」是两种都算的。结果就是：页面显示 810，导出的文件是空的，**两边都不报错**。这里与「累计股息」共用同一个归集函数（`services.dividend_entries`），页面有多少，文件里就有多少。
+
+导出的列（顺序就是列序）：
+
+| 列 | 说明 |
+| --- | --- |
+| 标的代码 | `asset.symbol` |
+| 标的名称 | `asset.name` |
+| 账户 | `account.name` |
+| 币种 | `currency` |
+| 除权日 | `ex_date`，只有股息明细里才有 |
+| 派息日 | `pay_date` |
+| 持股数 | `shares`，只有股息明细里才有 |
+| 每股派息 | `amount_per_share`，只有股息明细里才有 |
+| 税前 | `gross`，只有股息明细里才有 |
+| 税费 | `tax`，只有股息明细里才有 |
+| 税后 | 归集口径的到手金额（有明细取 `net`，纯流水取流水金额的绝对值） |
+| 分红再投 | `reinvested`，`是` / `否`；只有股息明细里才有 |
+| 来源 | 这一条是「股息明细」还是「流水录入」 |
+
+**「只有股息明细里才有」的那几列，在纯流水录入的行里是空格子，不是 `0`。** 「没有明细可查」与「这笔没收过税」对你是两件事 —— 写 `0` 等于替你在文件里宣布了一件没人知道的事。同一条口径也写在 `apps/analytics/dividend_income.py` 的 `DividendEntry` 上。
+
+这张表同样不是手抄完就算：`apps/core/tests/test_export_contract.py` 把它与 `apps/analytics/dividend_export.py` 的 `DIVIDEND_CSV_COLUMNS` 双向对齐（与流水那张表走同一个解析器、同一条判据）。
+
+BOM / CRLF / 公式注入防护 / 文件名给两份这几件事，两个导出**共用同一层实现**（`apps/core/csv_export.py`），行为逐字一致。有一条检查盯着「全仓只有一个渲染出口」：`render_line` / `sanitize_cell` / `quote_cell` 只许在那一个文件里定义，`BOM` / `EOL` 两个字面量也只许出现在那里，两个导出模块的同名函数必须**真的转调**它。各写一份的后果不是重复几十行，而是一个导出带 BOM、另一个不带 —— 你在同一个 Excel 里双击两个文件，一个中文正常、一个乱码。
 
 演示账号：`demo / demo12345`
 
@@ -334,6 +364,7 @@ GET  /api/v1/ingest/jobs/{id}/                     单条识别任务的结果�
 GET  /api/v1/ingest/drafts/                        草稿箱
 POST /api/v1/ingest/drafts/{id}/confirm|discard    确认入账 / 丢弃
 GET  /api/v1/analytics/positions|summary|dividends|calendar
+GET  /api/v1/analytics/dividends/export/           股息导出 CSV（与「累计股息」同口径，支持 ?year=）
 ```
 
 清单不是手抄完就算：`apps/core/tests/test_api_surface_contract.py` 把它与 `config/urls.py`
@@ -369,7 +400,7 @@ GET  /api/v1/analytics/positions|summary|dividends|calendar
 - [x] M2 行情与收益：多源抓价、持仓、浮盈、XIRR 多币种折算
 - [x] M3 股息模块：股息记录、月度聚合、日历
 - [x] M4 Agent 链路：文本与截图识别 → 草稿箱 → 确认入账
-- [ ] M5 打磨：截图上传端上接入、图表、导出 CSV（**流水已支持**，股息待做）、通知、真机签名
+- [ ] M5 打磨：截图上传端上接入、图表、导出 CSV（**流水与股息都已支持**）、通知、真机签名
 
 ## 已知约束
 

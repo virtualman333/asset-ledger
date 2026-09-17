@@ -70,9 +70,26 @@ def dividend_entries(user) -> list:
             "currency": row.currency,
             "pay_date": row.pay_date,
             "transaction_id": row.transaction_id,
+            "gross": row.gross,
+            "tax": row.tax,
+            "ex_date": row.ex_date,
+            "shares": row.shares,
+            "amount_per_share": row.amount_per_share,
+            "reinvested": row.reinvested,
         }
         for row in DividendRecord.objects.filter(user=user).only(
-            "asset_id", "account_id", "net", "currency", "pay_date", "transaction_id"
+            "asset_id",
+            "account_id",
+            "net",
+            "currency",
+            "pay_date",
+            "transaction_id",
+            "gross",
+            "tax",
+            "ex_date",
+            "shares",
+            "amount_per_share",
+            "reinvested",
         )
     ]
     dividend_txs = [
@@ -312,6 +329,35 @@ def build_summary(user, base: str | None = None) -> dict:
         "fx_warning": fx_warning,
         "position_count": len(positions),
     }
+
+
+class YearParamError(ValueError):
+    """`?year=` 写错了。
+
+    单独立一个类型而不是直接抛 `ValueError`：调用方要能把它翻成 HTTP 400，
+    而又不能顺手把别的 `ValueError` 一起吞掉。（与 `transactions/date_range.py`
+    的 `DateRangeError` 同一个套路。）
+    """
+
+
+def parse_year(raw, default: int | None = None) -> int | None:
+    """`?year=` 的解析 —— **唯一一处**。
+
+    `None` / 空串 → `default`（「没传这个参数」）；写了但不是四位数字 → `YearParamError`。
+
+    为什么必须只有一处：`/analytics/dividends/` 与本轮的导出接口读的是同一个参数、
+    判的是同一件事（「这一年的股息」）。两处各写一遍，就会出现「图表按 2026 筛、
+    导出按别的东西筛」这种谁也不报错的差异 —— 而用户是拿这两个数字互相对账的。
+
+    以前这里是 `int(year)`，写错直接 500：用户填 `2026年` 或 `abc`，看到的是一个
+    空白错误页，没有任何线索。现在回 400 并把收到的值念回去。
+    """
+    if raw is None or str(raw).strip() == "":
+        return default
+    text = str(raw).strip()
+    if not text.isdigit():
+        raise YearParamError(f"year 必须是四位数字年份，收到：{raw!r}")
+    return int(text)
 
 
 def dividend_monthly(user, year: int | None = None) -> list[dict]:

@@ -24,9 +24,15 @@ from apps.analytics.dividend_income import (
 AS_OF = date(2026, 9, 16)
 
 
-def record(asset_id=1, account_id=10, net="100", currency="CNY", pay_date=date(2026, 6, 1), transaction_id=None):
-    """一条股息明细（DividendRecord）。"""
-    return {
+def record(asset_id=1, account_id=10, net="100", currency="CNY", pay_date=date(2026, 6, 1), transaction_id=None, **detail):
+    """一条股息明细（DividendRecord）。
+
+    `**detail` 用来按需补上 `gross` / `tax` / `ex_date` / `shares` /
+    `amount_per_share` / `reinvested`。**不给就一个键都没有** —— 那正是
+    「这条数据里没有明细」的真实形态（`services.dividend_entries` 摘字段时也允许
+    值是 `None`），两种都得当「缺」处理。
+    """
+    row = {
         "asset_id": asset_id,
         "account_id": account_id,
         "net": net,
@@ -34,6 +40,8 @@ def record(asset_id=1, account_id=10, net="100", currency="CNY", pay_date=date(2
         "pay_date": pay_date,
         "transaction_id": transaction_id,
     }
+    row.update(detail)
+    return row
 
 
 def tx(rid=100, asset_id=1, account_id=10, amount="100", currency="CNY", traded_at=None):
@@ -108,6 +116,86 @@ class CollectTest(unittest.TestCase):
         """0.1 + 0.2 若走 float 会得到 0.30000000000000004。"""
         entries = collect_dividends([record(net="0.1"), record(net="0.2")], [])
         self.assertEqual(total(entries), Decimal("0.3"))
+
+
+class DetailFieldTest(unittest.TestCase):
+    """明细字段：**缺就是 None，不是 0**。
+
+    导出 CSV 时 `None` 写成空格子、`0` 写成 `0` —— 混成一个值等于替用户宣布
+    「这笔没收过税」。规则落在 `collect_dividends` 里（`_opt_dec`）。
+
+    为什么这一条非得写在这个文件里：导出的单测是**直接构造 `DividendEntry`** 的，
+    压不到归集这一层。实测过 —— 把 `_opt_dec` 改回 `_dec`（缺就返回 0），
+    `test_dividend_export.py` 一条都不红。
+    """
+
+    DETAIL_NAMES = ("gross", "tax", "ex_date", "shares", "amount_per_share", "reinvested")
+
+    def test_带明细的条目把明细原样带出来(self):
+        entries = collect_dividends(
+            [
+                record(
+                    gross="900",
+                    tax="90",
+                    ex_date=date(2026, 5, 20),
+                    shares="1000",
+                    amount_per_share="0.9",
+                    reinvested=True,
+                )
+            ],
+            [],
+        )
+        entry = entries[0]
+        self.assertEqual((entry.gross, entry.tax), (Decimal("900"), Decimal("90")))
+        self.assertEqual(entry.ex_date, date(2026, 5, 20))
+        self.assertEqual((entry.shares, entry.amount_per_share), (Decimal("1000"), Decimal("0.9")))
+        self.assertIs(entry.reinvested, True)
+        self.assertTrue(entry.has_detail)
+
+    def test_没有明细键时全是None而不是0(self):
+        """★ 本类的核心：`record()` 这条 dict 里根本没有 gross / tax 这些键。"""
+        entry = collect_dividends([record()], [])[0]
+        for name in self.DETAIL_NAMES:
+            value = getattr(entry, name)
+            self.assertIsNone(
+                value,
+                f"{name} 在没有明细的数据上变成了 {value!r} —— 必须保持 None："
+                "0 与「查不到」在导出的 CSV 里是不同的格子",
+            )
+
+    def test_键在但值是None时也是None(self):
+        """ORM 那侧摘出来的可空列就是 `None`，与「没这个键」同一个意思。"""
+        row = record()
+        row.update(dict.fromkeys(self.DETAIL_NAMES))
+        entry = collect_dividends([row], [])[0]
+        for name in self.DETAIL_NAMES:
+            self.assertIsNone(getattr(entry, name))
+
+    def test_写明是0的明细仍然是0(self):
+        """反过来：明细里写明 0 的要留住 —— 那是数据，不是「缺」。"""
+        entry = collect_dividends([record(gross="0", tax="0")], [])[0]
+        self.assertEqual(entry.gross, ZERO)
+        self.assertIsNotNone(entry.gross, "0 与「查不到」必须分得开")
+
+    def test_分红再投为False也要留住(self):
+        """`False` 是数据（没再投），不是「缺」。"""
+        entry = collect_dividends([record(reinvested=False)], [])[0]
+        self.assertIs(entry.reinvested, False)
+
+    def test_流水录入的条目没有任何明细字段(self):
+        entry = collect_dividends([], [tx()])[0]
+        for name in self.DETAIL_NAMES:
+            self.assertIsNone(getattr(entry, name))
+        self.assertFalse(entry.has_detail)
+
+    def test_明细的金额口径没被顺手改掉(self):
+        """对照：`amount` 缺了仍然是 **0**（归集口径那一层照旧）。
+
+        `_dec`（缺 = 0）与 `_opt_dec`（缺 = None）是刻意不同的两条路 ——
+        这个用例把「没有把两者合并」钉住。
+        """
+        entry = collect_dividends([record(net=None)], [])[0]
+        self.assertEqual(entry.amount, ZERO)
 
 
 class GroupTest(unittest.TestCase):

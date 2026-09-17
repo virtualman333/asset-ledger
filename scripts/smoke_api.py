@@ -15,15 +15,17 @@
 import json
 import sys
 import time
+from decimal import Decimal
 from pathlib import Path
 
 import requests
 
 from _smoke_lib import Report, run
 
-#: 列定义直接从服务端那份纯模块读（`export_rules` 只 import 标准库，不需要 Django）。
+#: 列定义直接从服务端那两份纯模块读（`export_rules` / `dividend_export` 都不 import Django）。
 #: **不在脚本里抄第二份列清单** —— 抄一份就等于把「列有没有变」这件事交给运气。
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+from apps.analytics.dividend_export import DIVIDEND_CSV_COLUMNS  # noqa: E402
 from apps.transactions.export_rules import CSV_COLUMNS  # noqa: E402
 
 USERNAME = "smoke_user"
@@ -212,6 +214,88 @@ def body(base: str, report: Report) -> None:
         params={"from": "2027-01-02", "to": "2027-01-01"}, headers=headers,
     )
     check("to 早于 from 回 400（导出与列表同一套判据）",
+          r.status_code == 400, f"{r.status_code} {r.text[:160]}")
+
+    # 11. 股息导出 —— 这一整段是为了钉住一件**单元测试压不到**的事：
+    #     股息有两条合法录入路径，只有一条会落 DividendRecord。导出若照「把明细表列出来」
+    #     的写法实现，另一条会整条消失，而页面上「累计股息」是两条都算的。
+    #     所以要真的走一遍 ORM → 归集 → 渲染，并且和页面上的数字对账。
+    flow_dividend = {
+        "account": account_id, "asset": asset_id, "side": "DIVIDEND", "amount": "77.25",
+        "currency": "CNY", "traded_at": "2026-08-20T10:00:00+08:00",
+        "client_request_id": "smoke-dividend-flow-0001", "note": "只落流水、没有股息明细",
+    }
+    r = session.post(f"{base}/transactions/records/", json=flow_dividend, headers=headers)
+    check("记一笔只有流水的股息（没有 DividendRecord）",
+          r.status_code in (200, 201), r.text[:160])
+
+    r = session.get(f"{base}/analytics/dividends/export/", headers=headers)
+    check("股息导出返回 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
+    check("股息导出 Content-Type 是 text/csv",
+          r.headers.get("Content-Type", "").startswith("text/csv"),
+          str(r.headers.get("Content-Type")))
+    disposition = r.headers.get("Content-Disposition") or ""
+    # 写死 URL 编码后的「股息」：引用常量算出来的名字就变成自证了
+    check("股息导出的中文名里是「股息」（响应头没因为非 latin-1 炸掉）",
+          "filename*=UTF-8''asset-ledger-%E8%82%A1%E6%81%AF-" in disposition, disposition)
+    check("股息导出也带 UTF-8 BOM", r.text.startswith("\ufeff"), repr(r.text[:30]))
+
+    d_lines = [ln for ln in r.text.split("\r\n") if ln != ""]
+    check("股息导出的列头与 DIVIDEND_CSV_COLUMNS 逐字一致",
+          bool(d_lines) and d_lines[0].lstrip("\ufeff") == ",".join(t for _, t in DIVIDEND_CSV_COLUMNS),
+          repr(d_lines[:1]))
+
+    d_titles = [t for _, t in DIVIDEND_CSV_COLUMNS]
+    d_rows = [dict(zip(d_titles, ln.split(","))) for ln in d_lines[1:]]
+    by_origin = {row["来源"]: row for row in d_rows}
+
+    check("★ 只有流水的那笔股息也出现在文件里（照明细表导出会整条漏掉）",
+          "流水录入" in by_origin,
+          f"文件里的来源有：{sorted(by_origin)}")
+
+    detail = by_origin.get("股息明细") or {}
+    check("有明细那条：税前/税费/持股数/每股派息都填上了",
+          detail.get("税前") == "300" and detail.get("税费") == "0"
+          and detail.get("持股数") == "1000" and detail.get("每股派息") == "0.3",
+          json.dumps(detail, ensure_ascii=False)[:200])
+    check("有明细那条：税后 = net = 300，来源是「股息明细」",
+          detail.get("税后") == "300" and detail.get("派息日") == "2026-07-15"
+          and detail.get("标的代码") == "601398" and detail.get("账户") == "冒烟账户",
+          json.dumps(detail, ensure_ascii=False)[:200])
+
+    flow = by_origin.get("流水录入") or {}
+    # 关键口径：写 0 等于替用户宣布「这笔没收过税」，必须留空格子
+    check("★ 纯流水那条：明细那几列是**空格子**，不是 0",
+          flow.get("税前") == "" and flow.get("税费") == "" and flow.get("持股数") == ""
+          and flow.get("每股派息") == "" and flow.get("分红再投") == "",
+          json.dumps(flow, ensure_ascii=False)[:200])
+    check("纯流水那条：税后 = 流水金额绝对值 = 77.25，派息日 = 流水日期",
+          flow.get("税后") == "77.25" and flow.get("派息日") == "2026-08-20",
+          json.dumps(flow, ensure_ascii=False)[:200])
+
+    # 与页面上的数字对账 —— 这是整段里最有价值的一条：把「导出与累计股息同口径」
+    # 从一句话变成可执行的检查。两边都按「全部年份」比，所以不传 year。
+    r = session.get(f"{base}/analytics/summary/", headers=headers)
+    page_total = report.field(r.json(), "dividend_total")
+    exported_total = sum(
+        (Decimal(row["税后"]) for row in d_rows if row["税后"]), Decimal("0")
+    )
+    check("★ 导出里「税后」列的合计 == 总览的累计股息（同一口径，不是各算一遍）",
+          page_total is not None and Decimal(str(page_total)) == exported_total,
+          f"页面 dividend_total={page_total!r}，导出合计={exported_total}")
+
+    # year 筛选与 /analytics/dividends/ 同口径
+    r = session.get(f"{base}/analytics/dividends/export/", params={"year": "2026"}, headers=headers)
+    y_lines = [ln for ln in r.text.split("\r\n") if ln != ""]
+    check("股息导出认 year 筛选（2026 那两笔都在）",
+          r.status_code == 200 and len(y_lines) - 1 == len(d_rows),
+          f"{r.status_code} 行数={len(y_lines) - 1}（全部年份 {len(d_rows)}）")
+
+    r = session.get(f"{base}/analytics/dividends/export/", params={"year": "abc"}, headers=headers)
+    check("股息导出的 year 写错回 400（以前是 500）", r.status_code == 400, f"{r.status_code} {r.text[:160]}")
+
+    r = session.get(f"{base}/analytics/dividends/", params={"year": "abc"}, headers=headers)
+    check("同一个 year 判据也管着图表接口（解析只有一处）",
           r.status_code == 400, f"{r.status_code} {r.text[:160]}")
 
 

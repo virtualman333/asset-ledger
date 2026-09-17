@@ -31,9 +31,28 @@ ZERO = Decimal("0")
 ANNUAL_WINDOW_DAYS = 365
 
 
+#: `origin` 的中文名。
+#:
+#: 加入集规则产生第三种来源，这张表必须跟着加 —— `apps/analytics/tests/test_dividend_export.py`
+#: 里有一条锁盯着「源码里出现的 origin 字样与这张表一一对应」，否则导出里会冒出一列英文，
+#: 而且不会有人报错。
+ORIGIN_LABELS = {
+    "record": "股息明细",
+    "transaction": "流水录入",
+}
+
+
 @dataclass(frozen=True)
 class DividendEntry:
-    """归集后的一条股息（已去重、已定金额口径）。"""
+    """归集后的一条股息（已去重、已定金额口径）。
+
+    `amount` 之后那几个是**明细字段**：只有 ``origin == "record"`` 的条目才有，
+    经由流水录入的股息一律是 ``None``，**不是 0**。
+
+    「没有明细可查」与「税前就是 0 / 没收过税」对用户是两件事：导出 CSV 时前者写成
+    空格子、后者写成 ``0``。混成同一个值，等于替用户在文件里宣布了一件没人知道的事。
+    （同一条口径也写在 `services.dividend_monthly` 的 docstring 里。）
+    """
 
     asset_id: int | None
     account_id: int | None
@@ -42,9 +61,22 @@ class DividendEntry:
     pay_date: date | None
     origin: str  # "record" | "transaction"，仅用于排查来源
 
+    # ---- 以下仅「有股息明细」的条目才有 ----
+    gross: Decimal | None = None
+    tax: Decimal | None = None
+    ex_date: date | None = None
+    shares: Decimal | None = None
+    amount_per_share: Decimal | None = None
+    reinvested: bool | None = None
+
     @property
     def position_key(self) -> tuple:
         return (self.account_id, self.asset_id)
+
+    @property
+    def has_detail(self) -> bool:
+        """这一条有没有可查的股息明细 —— 明细那几列是数字还是空格子由它决定。"""
+        return self.origin == "record"
 
 
 def _dec(value) -> Decimal:
@@ -54,6 +86,17 @@ def _dec(value) -> Decimal:
     if isinstance(value, Decimal):
         return value
     return Decimal(str(value))
+
+
+def _opt_dec(value) -> Decimal | None:
+    """**可空**数值：缺了就是 ``None``，不是 0（理由见 `DividendEntry`）。
+
+    明细字段必须走这一条而不是 `_dec()` —— 用 `_dec()` 的话，「这条没有明细」会
+    变成「税前 0」，导出 CSV 里那一格就从空格子变成 `0`。
+    """
+    if value is None or value == "":
+        return None
+    return _dec(value)
 
 
 def _as_date(value) -> date | None:
@@ -77,7 +120,12 @@ def collect_dividends(records, transactions) -> list[DividendEntry]:
     records / transactions 为 dict 序列，由调用方（services.py）从 ORM 摘出：
 
     - record: ``asset_id`` / ``account_id`` / ``net`` / ``currency`` / ``pay_date`` / ``transaction_id``
+      ＋ 明细字段 ``gross`` / ``tax`` / ``ex_date`` / ``shares`` / ``amount_per_share`` / ``reinvested``
     - transaction: ``id`` / ``asset_id`` / ``account_id`` / ``amount`` / ``currency`` / ``traded_at``
+
+    明细字段在**这里**就挂到条目上，而不是留给导出侧回头去 ORM 里二次匹配 ——
+    按 (标的, 账户, 派息日, 金额) 回查匹配不唯一（同一天同金额的两笔股息会互相错配），
+    而那种错配是安静的：金额列还是对的，只有税前/持股数那几列张冠李戴。
     """
     entries: list[DividendEntry] = []
     represented: set = set()
@@ -94,6 +142,12 @@ def collect_dividends(records, transactions) -> list[DividendEntry]:
                 amount=_dec(row.get("net")),
                 pay_date=_as_date(row.get("pay_date")),
                 origin="record",
+                gross=_opt_dec(row.get("gross")),
+                tax=_opt_dec(row.get("tax")),
+                ex_date=_as_date(row.get("ex_date")),
+                shares=_opt_dec(row.get("shares")),
+                amount_per_share=_opt_dec(row.get("amount_per_share")),
+                reinvested=row.get("reinvested"),
             )
         )
 

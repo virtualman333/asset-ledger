@@ -1,39 +1,9 @@
 # -*- coding: utf-8 -*-
-"""流水导出 CSV：列定义、单元格净化、行渲染 —— 全是纯函数，不 import django。
+"""流水导出 CSV：**列定义与取值** —— 纯函数，不 import django。
 
-为什么单独成模块
-----------------
-和 `amount_rules` / `dividend_income` / `valuation` 同一个理由：这里全是纯函数、
-不 import django，所以能被单测直接压（本仓库的测试承诺「不需要数据库、不需要 Django」）。
-「导出的列有哪些、单元格怎么写、Excel 会不会把它当公式执行」全都能离线断言。
-
-三个「错了也看不出来」的地方
-----------------------------
-1. **Excel / WPS / LibreOffice 会把以 `=` `+` `-` `@` 开头的单元格当公式执行。**
-   备注列来自用户手输与 Agent 对截图的 OCR —— 也就是说这段文本不完全由用户自己掌控。
-   不处理的话，导出的文件到了别人机器上，打开（甚至只是选中）就可能跑起来一段公式
-   （DDE / 外部引用），而 CSV 本身看不出任何异常。所以每个单元格都过一次
-   `sanitize_cell()`。代价要写明白：被中和的单元格前面会多一个单引号（`'=1+1`），
-   在 Excel 里那一格就是**多一个引号的文本**。**安全优先于好看**，这是刻意的取舍。
-2. **`Decimal.normalize()` 会产出科学计数法**：`Decimal("100.00000000").normalize()`
-   就是 `Decimal("1E+2")`，写在 CSV 里 Excel 显示成 `1E+2` 而不是 `100`。
-   所以数值一律再 `format(..., "f")` 落一次地，顺序不能反。
-3. **`-0`**：`Decimal("-0.00000000")` 归一后是 `Decimal("-0")`，直接写出去就是
-   一格 `-0` —— 账目里看起来像数据错了。归零时统一写 `0`。
-
-为什么带 UTF-8 BOM、行尾用 CRLF
---------------------------------
-BOM 是给 Excel 看的：不带 BOM 时 Excel（尤其中文 Windows 上的版本）会拿 GBK 去解
-UTF-8，中文列头变成乱码。CRLF 是 RFC 4180 的规定，也是 Excel 的默认。
-两条都不是「口味」，是「双击打开就知道了」的东西 —— 所以由单测钉住。
-
-为什么文件名要给两份（ASCII + 中文）
-------------------------------------
-HTTP 头的值只能是 latin-1。把「asset-ledger-流水-….csv」直接塞进 `Content-Disposition`
-会当场炸（Django 编码响应头时抛异常），而且是在**导出失败**的时候才炸 ——
-用户点一下导出，什么都没拿到，也不知道为什么。所以 `content_disposition()` 同时给
-旧客户端一个纯 ASCII 的 `filename=`，和 RFC 5987 的 `filename*=UTF-8''…`
-（现代浏览器取后者，中文名照常显示）。判据也有单测：结果必须能 `encode("latin-1")`。
+通用部分（数值写法、公式注入防护、RFC 4180 转义、BOM / CRLF、文件名与响应头）在
+`apps/core/csv_export.py`：那几条是「外部世界的要求」，与导出的是什么列无关，
+股息导出要用同一套。放两份的后果见那边的模块说明。
 
 时间为什么不能直接 `str()`
 ---------------------------
@@ -44,25 +14,20 @@ Excel 里那一列既不是时间（尾巴带 `+00:00`），又整整差 8 小�
 """
 from __future__ import annotations
 
-import re
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
-from urllib.parse import quote
 
-#: Excel 会把以这些字符开头的单元格当公式（实测三家电子表格都一样）
-FORMULA_PREFIXES = ("=", "+", "-", "@")
-
-#: 制表符 / 回车也被当成「后面那串是公式」的信号 —— 这是 Excel 的实际行为，不是臆测
-FORMULA_CONTROL = ("\t", "\r")
-
-#: 中和用的前缀。Excel 见到开头的单引号会强制当文本（代价见模块说明第 1 条）
-GUARD = "'"
-
-#: Excel 认它也认；给 `-` 开头的单元格定「这是负数还是公式」用
-NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?", re.ASCII)
-
-BOM = "\ufeff"
-EOL = "\r\n"
+from apps.core import csv_export
+from apps.core.csv_export import (
+    BOM,
+    EOL,
+    GUARD,
+    NEEDS_QUOTE,
+    content_disposition,
+    fmt_decimal,
+    quote_cell,
+    render_line,
+    sanitize_cell,
+)
 
 #: 导出的列：`(取值键, 中文表头)`，**顺序就是 CSV 里的列序**。
 #:
@@ -87,30 +52,44 @@ CSV_COLUMNS = (
     ("note", "备注"),
 )
 
-#: 一行里出现这些字符就得整体加双引号（RFC 4180）
-NEEDS_QUOTE = (",", '"', "\n", "\r")
+__all__ = [
+    "BOM",
+    "EOL",
+    "GUARD",
+    "NEEDS_QUOTE",
+    "CSV_COLUMNS",
+    "content_disposition",
+    "export_names",
+    "fmt_decimal",
+    "fmt_traded_at",
+    "quote_cell",
+    "render_csv",
+    "render_line",
+    "render_rows",
+    "sanitize_cell",
+    "transaction_cells",
+    "transaction_row",
+]
 
 
-def fmt_decimal(value) -> str:
-    """数值 → 人和 Excel 都认的写法。
+def export_names(now=None) -> tuple:
+    """流水导出的 `(ASCII 文件名, 中文文件名)`。
 
-    - 空（`None` / `""`）→ 空单元格；
-    - 整数不拖一串零（库里 DECIMAL(24,8) 取出来是 `1000.00000000`）；
-    - 不走科学计数法（`normalize()` 的坑，见模块说明第 2 条）；
-    - `-0` 归成 `0`（第 3 条）；
-    - 不是数的东西原样交出去 —— 这个函数不该负责替调用方判数据对错。
+    本模块只提供「中文名里那一段」这个知识（`"流水"`）；文件名的形状
+    （`asset-ledger-<标签>-<时刻>.csv`）由 `apps.core.csv_export` 定，
+    全仓只此一处。
     """
-    if value is None or value == "":
-        return ""
-    try:
-        number = Decimal(str(value))
-    except (InvalidOperation, ValueError, TypeError):
-        return str(value)
-    if not number.is_finite():
-        return str(value)
-    if number == 0:
-        return "0"
-    return format(number.normalize(), "f")
+    return csv_export.export_names("流水", now=now)
+
+
+def render_rows(rows, columns=CSV_COLUMNS):
+    """流水 CSV 文本行（表头 + 数据）。渲染实现在 `apps.core.csv_export`。"""
+    return csv_export.render_rows(rows, columns)
+
+
+def render_csv(rows, columns=CSV_COLUMNS) -> str:
+    """`render_rows()` 的整串版本（单测与「一次给完」的调用点用）。"""
+    return csv_export.render_csv(rows, columns)
 
 
 def fmt_traded_at(value, tz=None) -> str:
@@ -127,56 +106,6 @@ def fmt_traded_at(value, tz=None) -> str:
             value = value.astimezone(tz)
         return value.strftime("%Y-%m-%d %H:%M:%S")
     return str(value)
-
-
-def sanitize_cell(value) -> str:
-    """一个单元格的最终文本：挡住公式注入，再保证是字符串。
-
-    负数（`-1.5`）与我们自己算出来的 `-2500` 不动 —— 那是数据不是公式。
-    判据是「`-` 后面整串就是一个数」，不是「以 `-` 开头」。
-    """
-    text = "" if value is None else str(value)
-    if not text:
-        return ""
-    head = text[0]
-    if head in FORMULA_CONTROL:
-        return GUARD + text
-    if head in FORMULA_PREFIXES:
-        if head == "-" and NUMBER_RE.fullmatch(text):
-            return text
-        return GUARD + text
-    return text
-
-
-def quote_cell(text: str) -> str:
-    """RFC 4180 转义：含逗号 / 引号 / 换行的单元格整体加双引号，内部引号翻倍。"""
-    if any(ch in text for ch in NEEDS_QUOTE):
-        return '"' + text.replace('"', '""') + '"'
-    return text
-
-
-def render_line(cells) -> str:
-    """一行（**不含 BOM**）：净化 → 转义 → 逗号连接 → CRLF。
-
-    净化放在这里而不是 `transaction_row()` 里，是因为这里是**唯一的渲染出口**：
-    不管哪条路径拼出来的行，都得过这一道。
-    """
-    return ",".join(quote_cell(sanitize_cell(c)) for c in cells) + EOL
-
-
-def render_rows(rows, columns=CSV_COLUMNS):
-    """CSV 文本行，**第一行是表头**，BOM 只加在第一行前面。生成器，便于流式吐出去。"""
-    yield BOM + render_line([title for _, title in columns])
-    for row in rows:
-        yield render_line(row)
-
-
-def render_csv(rows, columns=CSV_COLUMNS) -> str:
-    """`render_rows()` 的整串版本（单测与「一次给完」的调用点用）。
-
-    拼行只有 `render_line()` 一处实现，这里只是把它连起来 —— 不另起一份。
-    """
-    return "".join(render_rows(rows, columns))
 
 
 def transaction_cells(tx, side_labels, source_labels, tz=None) -> dict:
@@ -221,18 +150,3 @@ def transaction_row(tx, side_labels, source_labels, columns=CSV_COLUMNS, tz=None
     if missing:
         raise KeyError(f"CSV_COLUMNS 里有列没人填：{missing} —— 加了列就得在 transaction_cells 里给出取值")
     return [cells[key] for key, _ in columns]
-
-
-def export_names(now=None) -> tuple:
-    """`(ASCII 文件名, 中文文件名)`。两份都要，理由见模块说明。"""
-    stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M")
-    return f"asset-ledger-{stamp}.csv", f"asset-ledger-流水-{stamp}.csv"
-
-
-def content_disposition(ascii_name: str, unicode_name: str) -> str:
-    """`Content-Disposition` 的值：老客户端读 `filename=`，现代客户端读 `filename*=`。
-
-    返回值**必须**是 latin-1 可编码的 —— 否则 Django 写响应头时直接抛异常，
-    用户看到的是「点导出没反应」。这一条有单测盯着。
-    """
-    return "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (ascii_name, quote(unicode_name))
