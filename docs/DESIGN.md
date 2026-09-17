@@ -224,6 +224,11 @@ asset-ledger/                 # monorepo（建议）
 
 ## 6. API 草案（`/api/v1/`）
 
+> 这是 M0 的设计草案，**不是**当前的接口清单 —— 实现过程中路径改过（草案的 `/positions/`
+> 现在挂在 `/analytics/positions/`，草案的 `/transactions/` 现在是 `/transactions/records/`）。
+> 当前清单以 README 的「主要接口」为准，那份由 `apps/core/tests/test_api_surface_contract.py`
+> 对着 `config/urls.py` 与各 app 的 `urls.py` 逐条钉住。这一节保留原样，是设计记录。
+
 ```
 POST   /auth/register  /auth/token  /auth/token/refresh
 GET    /accounts/                     CRUD

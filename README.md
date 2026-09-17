@@ -274,6 +274,7 @@ python -m unittest discover -s apps -t .
 
 ```
 POST /api/v1/auth/register|token|token/refresh    认证
+GET  /api/v1/auth/me/                              当前用户（需认证）
 GET  /api/v1/health/                               版本自证（源码指纹，无需认证）
 GET/POST /api/v1/accounts/                         账户
 GET/POST /api/v1/assets/                           标的
@@ -282,10 +283,16 @@ GET/POST /api/v1/transactions/dividends/           股息
 GET  /api/v1/market/quotes/?asset_ids=1,2&refresh=1 行情
 GET  /api/v1/market/fx/?base=USD&quote=CNY         汇率
 POST /api/v1/ingest/image|text                     凭证上传与识别
+GET  /api/v1/ingest/jobs/{id}/                     单条识别任务的结果（收件箱轮询）
 GET  /api/v1/ingest/drafts/                        草稿箱
 POST /api/v1/ingest/drafts/{id}/confirm|discard    确认入账 / 丢弃
 GET  /api/v1/analytics/positions|summary|dividends|calendar
 ```
+
+清单不是手抄完就算：`apps/core/tests/test_api_surface_contract.py` 把它与 `config/urls.py`
+加各 app 的 `urls.py` **双向**对齐 —— 漏一条、多一条都红。同一个检查还钉住
+`apps/*/urls.py` 有没有被挂到根 urlconf：一个 app 有 urls.py 却没被 `include`，它的接口
+**存在但访问不到**，全程不报错，只有 404。
 
 `analytics/summary/` 里的收益口径：
 
@@ -331,6 +338,10 @@ GET  /api/v1/analytics/positions|summary|dividends|calendar
   其余进程只跑 Web 请求 —— 这是刻意的，否则每轮会被放大成 N 遍。
   多机部署时每台机器各有一个调度器（锁是**本机**的，别放到网络盘上）
 - 股息数据以手动录入与 Agent 识别为主，自动股息日历仍在 TODO
+- 客户端默认后端地址（`10.0.2.2:8000`）在 `ApiClient.ets` 与 `EntryAbility.ets` 里**各写了
+  一遍**；本机没有 DevEco / hvigor 工具链，改 `.ets` 不会在自测里被发现，所以先由
+  `test_api_surface_contract.py` 钉住「两份一致、且与上面那句 README 一致」。真要收敛就
+  在 `ApiClient.ets` export 一个 `DEFAULT_API_BASE_URL`、让 `EntryAbility.ets` import 它
 - `/api/v1/health/` 的指纹在入哈希前把行尾统一成 LF，所以**「只改了行尾」不算改动** ——
   这是刻意的（同一个提交在 Windows 与 Linux 上必须是同一个指纹），代价是它答不了
   「行尾有没有被改坏」这类问题
