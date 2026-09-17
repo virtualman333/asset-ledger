@@ -124,6 +124,13 @@ scripts/   冒烟测试等工具脚本
 | 统计 | 总资产、成本、浮盈、总收益、XIRR 年化、股息月度分布 |
 | 我的 | 退出登录 |
 
+这张表不是手抄完就算：`apps/core/tests/test_client_pages_contract.py` 把它与
+`harmony/entry/src/main/ets/pages/Index.ets` 里的 `tabBar(this.tabItem('持仓', 0))` 这样的
+调用**双向**对齐 —— 名字逐个相等、顺序必须相同、下标必须是 `0..n-1` 连续（跳号在鸿蒙里
+表现为「点了没反应」）。同一个检查还顺带钉住每个页面文件都被 `Index.ets` import、
+每条本地 import 都落到磁盘、import 进来的组件真的被用到、`main_pages.json` 登记的页面
+都存在且入口页在里面。改 Tab 栏就得改这张表，反之亦然，否则自测红。
+
 ## 快速开始
 
 后端：
@@ -339,9 +346,14 @@ GET  /api/v1/analytics/positions|summary|dividends|calendar
   多机部署时每台机器各有一个调度器（锁是**本机**的，别放到网络盘上）
 - 股息数据以手动录入与 Agent 识别为主，自动股息日历仍在 TODO
 - 客户端默认后端地址（`10.0.2.2:8000`）在 `ApiClient.ets` 与 `EntryAbility.ets` 里**各写了
-  一遍**；本机没有 DevEco / hvigor 工具链，改 `.ets` 不会在自测里被发现，所以先由
+  一遍**；本机没有 DevEco / hvigor 工具链，编译不出来，所以先由
   `test_api_surface_contract.py` 钉住「两份一致、且与上面那句 README 一致」。真要收敛就
   在 `ApiClient.ets` export 一个 `DEFAULT_API_BASE_URL`、让 `EntryAbility.ets` import 它
+- 承接上一条：本机没有鸿蒙工具链，`.ets` 的正确性**只**能靠读源码的契约检查兜底。目前
+  钉住的只有「客户端页面清单 / import 落点 / 路由登记」（`test_client_pages_contract.py`）
+  与「默认后端地址两处一致」（`test_api_surface_contract.py`）——**这两条没覆盖到的 `.ets`
+  改动，自测一律看不见**。加 Tab、加页面、改 import 时，记得把新的不变式也一并钉住，
+  否则下次就轮到它静默漂移
 - `/api/v1/health/` 的指纹在入哈希前把行尾统一成 LF，所以**「只改了行尾」不算改动** ——
   这是刻意的（同一个提交在 Windows 与 Linux 上必须是同一个指纹），代价是它答不了
   「行尾有没有被改坏」这类问题
