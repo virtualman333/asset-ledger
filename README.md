@@ -350,7 +350,9 @@ GET  /api/v1/analytics/positions|summary|dividends|calendar
   `test_api_surface_contract.py` 钉住「两份一致、且与上面那句 README 一致」。真要收敛就
   在 `ApiClient.ets` export 一个 `DEFAULT_API_BASE_URL`、让 `EntryAbility.ets` import 它
 - 承接上一条：本机没有鸿蒙工具链，`.ets` 的正确性**只**能靠读源码的契约检查兜底。目前
-  钉住的只有「客户端页面清单 / import 落点 / 路由登记」（`test_client_pages_contract.py`）
+  钉住的只有「客户端页面清单 / import 落点 / 路由登记」（`test_client_pages_contract.py`，
+  其中 import 那一面覆盖具名 / 默认 / 命名空间 / 只为副作用**四种写法**，并且额外拿一个宽扫
+  给**解析面自己**对账 —— 出现第五种写法会直接红，而不是静默漏过）
   与「默认后端地址两处一致」（`test_api_surface_contract.py`）——**这两条没覆盖到的 `.ets`
   改动，自测一律看不见**。加 Tab、加页面、改 import 时，记得把新的不变式也一并钉住，
   否则下次就轮到它静默漂移
