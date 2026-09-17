@@ -146,12 +146,33 @@ python manage.py refresh_quotes          # 抓一轮（缓存期内的标的会�
 python manage.py refresh_quotes --force  # 忽略缓存，强制重抓
 ```
 
-冒烟测试（后端已启动）：
+冒烟测试（**默认自启一个只服务当前代码的服务端**，跑完关掉）：
 
 ```bash
 python scripts/smoke_api.py             # 覆盖注册→记账→行情→统计→Agent 识别→入账
 python scripts/smoke_record_flow.py     # 覆盖鸿蒙「记一笔」页：标的自动建→买卖→股息→出入金→持仓推导→股息口径一致
 ```
+
+要验一个**已经在跑**的服务（比如部署到服务器之后），用 `--base` 指过去
+（`AL_SMOKE_BASE` 环境变量等价）：
+
+```bash
+python scripts/smoke_record_flow.py --base http://127.0.0.1:8000
+```
+
+这两条命令原先各自写死 `127.0.0.1:8000`，于是「脚本验的是这份代码」全靠「那个端口上的
+进程恰好是这份代码」这个约定撑着，而脚本对它一无所知：谁起的、什么时候起的、跑的是哪个
+提交。实测撞上过一个两天前起的旧进程：它的 `/analytics/summary/` 还是旧字段，26 条检查里
+5 条 FAIL —— **全是假缺陷**；随后脚本在 `summary["dividend_yield"]` 上 KeyError 中断，
+连失败小结都没打印出来。一次误诊，加一次「没有结论」。所以改成：**测的必须是这份代码**，
+由构造保证而不是靠约定；`--base` 模式下脚本会在开头声明它无法自证这一点。
+
+两个脚本共用 `scripts/_smoke_lib.py`，它另外兜住一件事：body 里抛出的任何异常都折算成
+一条 FAIL，退出码永远由检查结果决定 —— 冒烟脚本不允许以「没有结论」收场。这些性质由
+`apps/core/tests/test_smoke_lib.py` 钉住，连同「`scripts/` 里的脚本」与「本节点名的脚本」
+的双向一致（新脚本忘了写文档、或文档点着不存在的脚本，都会红）。
+
+自启的进程连的是 `server/.env` 那个库，所以它会**真的写库**，和手工点一遍「记一笔」等价。
 
 单元测试（纯 Python，**不需要数据库、不需要 Django**）：
 
