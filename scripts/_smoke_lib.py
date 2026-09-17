@@ -16,14 +16,22 @@
 - 地址写死 → 脚本能回答的问题只能是「那个进程对不对」，而不是「我这份代码对不对」；
 - 断言直接下标取值 → 响应形状一变就不是「失败」，而是「崩溃」。
 
-所以这个底座提供三件事
+所以这个底座提供四件事
 ----------------------
 1. `Report`：检查记录 + **异常兜底**。`run()` 把 body 抛出的任何异常折算成一条 FAIL，
    退出码永远由检查结果决定 —— 「跑出一半没有结论」这种结局不存在。
-2. `resolve_target()`：给了 `--base` / `AL_SMOKE_BASE` 就连过去（并在开头声明它无法自证），
-   没给就**自启**。没有「默认连 8000」这一档。
+2. `resolve_target()`：给了 `--base` / `AL_SMOKE_BASE` 就连过去，没给就**自启**。
+   没有「默认连 8000」这一档。
 3. `start_server()`：拿当前 checkout 起一个 `runserver --noreload`，跑完杀掉。于是
    「测的就是这份代码」由构造保证，不靠约定。
+4. `check_code_identity()`：两种模式都跑一遍，向服务端的 `/health/` 要**它自己那份源码的
+   内容指纹**，与本机的算一遍比对。「测的是这份代码」于是从「声明我无法自证」变成一条
+   会红会绿的检查 —— 声明拦不住误诊，比对才拦得住。
+   - 指纹相同 → PASS；
+   - 指纹不同 / 端点不存在（对面是没这个端点的旧版本）/ 对面不是 asset-ledger
+     / 进程落后于它自己那份源码 → FAIL，并把话说到底：**接下来的断言失败不能当缺陷读**。
+   - 自启模式也走这条路：`start_server()` 起的是当前 checkout 这件事，原先只是「由构造
+     保证」，现在被真的核对过一遍（万一 `manage.py` 落到了另一个树上，这条会红）。
 
 只用标准库
 ----------
@@ -34,6 +42,8 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib.util
+import json
 import os
 import socket
 import subprocess
@@ -139,6 +149,139 @@ def resolve_target(argv: list[str] | None = None, prog: str | None = None) -> tu
     return ("external", base) if base else ("self", "")
 
 
+#: 服务端的自证端点（实现见 `server/apps/core/views.py`）
+HEALTH_PATH = "/health/"
+
+#: 自证端点是「探活」，不该让脚本等太久
+HEALTH_TIMEOUT = 5.0
+
+#: 服务端该报出的名字。报的是别的，说明 `--base` 指错了地方 —— 那也得说清楚
+SERVICE_NAME = "asset-ledger"
+
+#: 服务端源码的根：与 `settings.BASE_DIR` 同一个目录
+SERVER_DIR = ROOT / "server"
+
+#: 按路径加载来的那个模块在 `sys.modules` 里用的名字
+_STAMP_MODULE = "_al_source_stamp"
+
+
+def load_source_stamp():
+    """按**文件路径**把 `server/apps/core/source_stamp.py` 加载进来，返回那个模块。
+
+    指纹只许有一份实现：脚本与服务端必须算出同一个数，否则「比对」本身就无从谈起。
+    所以这里不另写一遍哈希，而是把服务端那份实现拿过来用。
+
+    为什么不 `import apps.core.source_stamp`：那要先把 `server/` 塞进 `sys.path`，还会顺带
+    执行 `apps/` 与 `apps/core/` 的 `__init__` —— 与本模块「只用标准库、不 import django」
+    的约束擦边。按路径加载谁也不惊动。
+    """
+    cached = sys.modules.get(_STAMP_MODULE)
+    if cached is not None:
+        return cached
+    path = SERVER_DIR / "apps" / "core" / "source_stamp.py"
+    spec = importlib.util.spec_from_file_location(_STAMP_MODULE, path)
+    if spec is None or spec.loader is None:  # pragma: no cover - 只有那个文件被删掉才会走到
+        raise RuntimeError(f"找不到源码指纹模块：{path}")
+    module = importlib.util.module_from_spec(spec)
+    # **必须先登记进 `sys.modules` 再执行**：`@dataclass` 会在
+    # `sys.modules[cls.__module__]` 里把自己找回来，模块不在册就是
+    # `AttributeError: 'NoneType' object has no attribute '__dict__'` ——
+    # 按路径加载的标准坑，实测撞到过（外部模式整个跑不起来）。
+    sys.modules[_STAMP_MODULE] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        # 加载失败就把半成品摘掉，别留一个「在册但没初始化完」的模块给下一次调用
+        sys.modules.pop(_STAMP_MODULE, None)
+        raise
+    return module
+
+
+def local_snapshot():
+    """本机 `server/` 的源码快照 —— 与服务端扫的是同一套规则、同一份实现。"""
+    return load_source_stamp().scan(SERVER_DIR)
+
+
+def fetch_health(base: str, timeout: float = HEALTH_TIMEOUT):
+    """GET `<base>/health/`，返回 `(payload, 错误串)`，两者必有一个是空的。"""
+    try:
+        with urllib.request.urlopen(f"{base}{HEALTH_PATH}", timeout=timeout) as resp:  # noqa: S310
+            return json.loads(resp.read().decode("utf-8")), ""
+    except urllib.error.HTTPError as exc:
+        return None, f"HTTP {exc.code}"
+    except Exception as exc:  # noqa: BLE001 - 连接失败十几种，一律算「拿不到」
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def check_code_identity(base: str, report: Report, mode: str = "external") -> None:
+    """核对「对面跑的就是这份代码」，记成一条检查，并把结论说到底。
+
+    `mode` 只影响措辞（`"external"` / `"self"`），**不影响判据**：拿不到「一致」这个结论
+    就是失败。这一条红了意味着后面所有断言说的都是**另一个构建**的行为 —— 那正是会把人
+    带偏的假缺陷，所以必须在这一条里当场说破：那些失败不能当成本轮改动的缺陷读。
+
+    self 模式也走这条路：`start_server()` 起的是当前 checkout，原先只是「由构造保证」，
+    现在被真的核对过一遍（万一 `manage.py` 落到了另一个树上，这里会红）。
+    """
+    name = "服务端跑的就是当前这份代码"
+    where = "自启的服务端" if mode == "self" else "--base 指定的服务端"
+    local = local_snapshot()
+    print(f"   本机源码：{local.files} 个 .py，指纹 {local.fingerprint[:12]}…")
+
+    payload, err = fetch_health(base)
+    if payload is None:
+        why = (
+            f"{where}没有 {HEALTH_PATH}（404）—— 它跑的是**没有这个端点的旧版本**。"
+            "断言成片失败时别急着当缺陷读，先重启服务端；或者不带 --base 跑一遍。"
+            if err.startswith("HTTP 404")
+            else f"拿不到 {base}{HEALTH_PATH}（{err}）—— 无法核对「跑的是哪份代码」。"
+        )
+        print(f"   ⚠ {why}")
+        report.check(name, False, why)
+        return
+
+    if not isinstance(payload, dict) or payload.get("service") != SERVICE_NAME:
+        got = payload.get("service") if isinstance(payload, dict) else type(payload).__name__
+        why = f"{base} 报的服务名是 {got!r}，不是 {SERVICE_NAME!r} —— 指错地方了。"
+        print(f"   ⚠ {why}")
+        report.check(name, False, why)
+        return
+
+    source = payload.get("source") or {}
+    remote_fp = str(source.get("fingerprint") or "")
+    print(
+        f"   服务端源码：{source.get('files')} 个 .py，指纹 {remote_fp[:12]}…"
+        f"（启动于 {payload.get('started_at')}，pid {payload.get('pid')}，"
+        f"已跑 {payload.get('uptime_seconds')}s）"
+    )
+    if source.get("unreadable"):
+        print(f"   ⚠ 服务端读不到它自己的这几个文件：{source['unreadable']}")
+
+    if source.get("stale"):
+        why = (
+            f"服务端进程起来之后，它自己那份源码又被改过：{source.get('stale_files')}"
+            f"（最新改动 {source.get('newest_mtime')}）—— 它跑的不是磁盘上现在这份代码了，"
+            "重启它再重跑。"
+        )
+        print(f"   ⚠ {why}")
+        report.check(name, False, why)
+        return
+
+    if not remote_fp or remote_fp != local.fingerprint:
+        why = (
+            f"指纹对不上：服务端 {remote_fp[:16] or '(空)'}…（{source.get('files')} 个 .py）"
+            f" vs 本机 {local.fingerprint[:16]}…（{local.files} 个 .py）—— 它跑的是"
+            "**别的构建**。下面任何失败都可能是那个构建的旧代码造成的，不是这份源码的缺陷；"
+            "不带 --base 跑一遍才知道这份代码的真实表现。"
+        )
+        print(f"   ⚠ {why}")
+        report.check(name, False, why)
+        return
+
+    print("   [一致] 已确认：它跑的就是当前这份代码")
+    report.check(name, True)
+
+
 def free_port() -> int:
     """问内核要一个当下可用的端口（绑 0 让内核分配，读完立刻释放）。"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -227,15 +370,13 @@ def run(body, argv: list[str] | None = None, prog: str | None = None) -> int:
     try:
         if mode == "external":
             print(f"服务端：--base 指定的外部服务  {base}")
-            print(
-                "   ⚠ 本脚本无法证明它跑的是当前这份代码 —— 断言成片失败时，"
-                "先重启服务端再重跑（或者不带 --base 跑，让它自己起一个）。"
-            )
+            check_code_identity(base, report, mode="external")
             body(base, report)
         else:
             with start_server() as (base, log_path):
                 print(f"服务端：自启（当前 checkout）  {base}")
                 print(f"   （跑完随脚本一起关闭；启动日志 {log_path}）")
+                check_code_identity(base, report, mode="self")
                 body(base, report)
     except Exception as exc:  # noqa: BLE001 - 故意兜住一切：「崩溃」不是允许的结局
         traceback.print_exc()

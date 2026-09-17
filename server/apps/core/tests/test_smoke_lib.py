@@ -16,20 +16,25 @@ KeyError 中断 —— **失败小结没打印，退出码也不再反映检查�
 3. `scripts/` 下的脚本与 README 里点名的脚本互为对方的清单（新脚本忘了写文档、
    或文档点着不存在的脚本，都要红 —— 不手工维护白名单，两边各自现算）。
 
-本模块不 import django（README 承诺整套单测不需要它），也不联网、不起进程：
-`run()` 那两条用例都走 `--base` 分支，而且 body 第一行就抛异常 / 只记一条通过，
-压根不会发出请求。
+本模块不 import django（README 承诺整套单测不需要它），也不连外网、不碰数据库：
+`run()` 那两条用例走的是 `--base` 分支，body 第一行就抛异常 / 只记一条通过 —— 它们自己不碰
+任何业务接口。指纹核对那一节（那两条用例也在其中）会在 `127.0.0.1` 上起一个**只应答
+`/health/` 的一次性假服务端**（标准库），让 `check_code_identity()` 面对真 HTTP，
+而不是被打桩的返回值。
 
 跑法（在 server/ 下）：python -m unittest discover -s apps -t .
 """
 import ast
 import contextlib
 import io
+import json
 import os
 import re
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 #: 本文件在 `server/apps/core/tests/` 下 —— 往上第三层才是 `server/`（跑测试的 cwd）
@@ -44,9 +49,11 @@ assert SCRIPTS.is_dir(), f"算错了 scripts 目录：{SCRIPTS}"
 sys.path.insert(0, str(SCRIPTS))
 import _smoke_lib  # noqa: E402  （必须先把它所在目录塞进 sys.path）
 
+from apps.core import source_stamp  # noqa: E402
+
 from _smoke_lib import Report, api_base, resolve_target, run  # noqa: E402
 
-#: 只用来起 `run()` 的 external 分支：body 立刻抛异常，不会真的连它
+#: 一个**确定连不上**的地址：验「连不上也得给出结论」，也给不该真的出网的用例兜底
 UNREACHABLE_BASE = "http://127.0.0.1:1"
 
 
@@ -127,18 +134,24 @@ class TestExceptionBecomesOneFailure(unittest.TestCase):
             report.check("总览含股息率字段", "dividend_yield" in summary, sorted(summary))
             _ = summary["dividend_yield"]  # 原来是这一行：直接下标
 
-        code, out = call_run(boom, ["--base", UNREACHABLE_BASE])
+        with stub_health(health_payload()) as base:  # 指纹核对先过，剩下的失败只来自 body
+            code, out = call_run(boom, ["--base", base])
         self.assertEqual(code, 1, "崩溃之后退出码必须是 1：\n" + out)
         self.assertIn("KeyError", out, "异常类型要出现在报告里：\n" + out)
         self.assertIn("条失败", out, "小结必须打出来：\n" + out)
         self.assertNotIn("全部通过", out)
 
     def test_passing_body_still_exits_zero(self):
-        """反向对照：兜底不许把「没崩」也判成失败，否则它是恒红的。"""
+        """反向对照：兜底不许把「没崩」也判成失败，否则它是恒红的。
+
+        指向一个**能自证**的假服务端：`--base` 模式下脚本会先核对源码指纹，核对不过本身
+        就是一条 FAIL（那是刻意的）—— 换个连不上的地址，这条用例就测到别的东西上去了。
+        """
         def fine(base, report):
             report.check("一切正常", True)
 
-        code, out = call_run(fine, ["--base", UNREACHABLE_BASE])
+        with stub_health(health_payload()) as base:
+            code, out = call_run(fine, ["--base", base])
         self.assertEqual(code, 0, out)
         self.assertIn("全部通过", out)
 
@@ -277,6 +290,152 @@ class TestScriptsAndReadmeAgree(unittest.TestCase):
         """扫描面自证：两边都真扫到了东西，否则上面两条是恒真的。"""
         self.assertGreaterEqual(len(self.scripts()), 2, f"只扫到 {sorted(self.scripts())}")
         self.assertGreaterEqual(len(self.documented()), 2, f"只扫到 {sorted(self.documented())}")
+
+
+@contextlib.contextmanager
+def stub_health(payload=None):
+    """在 `127.0.0.1` 上起一个只应答 `/health/` 的一次性服务端，yield 它的 `/api/v1` 基址。
+
+    `payload=None` 时一律回 404 —— 模拟「对面是个没有这个端点的旧版本」，那正是本轮要
+    能认出来的第一种情况。用真 HTTP 而不是打桩 `fetch_health()`：这样连「请求真的发出去了
+    吗、路径拼对了吗、404 真的走的是那个分支吗」一起被验到。
+    """
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - http.server 规定的接口名
+            if payload is None:
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):  # 访问日志别掺进套件的输出
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
+    )
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/api/v1"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def health_payload(source=None, **top):
+    """拼一份「服务端报回来的」payload —— 默认就是**一致**的那一种。"""
+    local = _smoke_lib.local_snapshot()
+    body = {
+        "files": local.files,
+        "fingerprint": local.fingerprint,
+        "newest_file": "apps/core/source_stamp.py",
+        "newest_mtime": "2026-09-17T00:00:00Z",
+        "unreadable": [],
+        "stale": False,
+        "stale_files": [],
+    }
+    body.update(source or {})
+    payload = {
+        "service": "asset-ledger",
+        "pid": 4321,
+        "started_at": "2026-09-17T00:00:00Z",
+        "uptime_seconds": 1.5,
+        "source": body,
+    }
+    payload.update(top)
+    return payload
+
+
+def probe(base):
+    """跑一遍 `check_code_identity()`，返回 `(报告, 输出)`。"""
+    report = Report()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _smoke_lib.check_code_identity(base, report, mode="external")
+    return report, buf.getvalue()
+
+
+class TestCodeIdentityProbe(unittest.TestCase):
+    """指纹核对：只有「指纹一致、且进程没落后于源码」算通过，其余结局各有各的话说。
+
+    这是 `--base` 模式唯一能挡住上一轮那类误诊的东西（5 条假缺陷全部来自一个跑着旧代码
+    的进程），所以五种结局都得真的走一遍 —— 全都算通过固然是坏的，「一律失败」也是坏的。
+    """
+
+    NAME = "服务端跑的就是当前这份代码"
+
+    def test_agreement_passes(self):
+        with stub_health(health_payload()) as base:
+            report, out = probe(base)
+        self.assertEqual(report.total, 1, out)
+        self.assertEqual(report.fails, [], out)
+        self.assertIn("已确认", out)
+
+    def test_the_payload_decides_not_the_network(self):
+        """反向对照：同一个假服务端、同一套请求，只把指纹换掉，结论就从通过变成失败。"""
+        with stub_health(health_payload()) as base:
+            passed, _ = probe(base)
+        with stub_health(health_payload(source={"fingerprint": "0" * 64})) as base:
+            failed, out = probe(base)
+        self.assertEqual(passed.fails, [])
+        self.assertEqual(failed.fails, [self.NAME])
+        self.assertIn("别的构建", out)
+        self.assertIn("不是这份源码的缺陷", out)
+
+    def test_404_is_named_as_an_old_build(self):
+        with stub_health(None) as base:
+            report, out = probe(base)
+        self.assertEqual(report.fails, [self.NAME])
+        self.assertIn("旧版本", out)
+        self.assertIn("404", out)
+
+    def test_a_stale_process_fails(self):
+        """指纹一样、但服务端自己承认「起来之后源码又被改过」，也不算通过：
+
+        先改文件再发请求，指纹算的是**磁盘上的新内容**，而进程跑的仍是旧代码 ——
+        只看指纹会把这一种漏过去。
+        """
+        payload = health_payload(source={"stale": True, "stale_files": ["apps/market/services.py"]})
+        with stub_health(payload) as base:
+            report, out = probe(base)
+        self.assertEqual(report.fails, [self.NAME])
+        self.assertIn("又被改过", out)
+        self.assertIn("services.py", out)
+
+    def test_a_foreign_service_fails(self):
+        with stub_health(health_payload(service="some-other-app")) as base:
+            report, out = probe(base)
+        self.assertEqual(report.fails, [self.NAME])
+        self.assertIn("指错地方", out)
+
+    def test_an_unreachable_target_fails_without_crashing(self):
+        """连不上也得给结论（一条 FAIL），不许抛出去 —— 崩掉的脚本没有结论。"""
+        report, out = probe(UNREACHABLE_BASE)
+        self.assertEqual(report.fails, [self.NAME])
+        self.assertIn("拿不到", out)
+
+    def test_both_sides_load_one_implementation(self):
+        """指纹只许有一份实现：脚本加载的就是服务端那个文件本身，算出来的也得是同一个数。
+
+        各写一份哈希实现是这里最容易犯的错 —— 两份实现一旦漂移，「比对」就变成自说自话。
+        """
+        module = _smoke_lib.load_source_stamp()
+        self.assertEqual(
+            Path(module.__file__).resolve(),
+            (SERVER / "apps" / "core" / "source_stamp.py").resolve(),
+        )
+        direct = source_stamp.scan(SERVER)
+        self.assertGreaterEqual(direct.files, 50, f"只扫到 {direct.files} 个 .py，比对是空的")
+        self.assertEqual(_smoke_lib.local_snapshot().fingerprint, direct.fingerprint)
+        self.assertEqual(_smoke_lib.local_snapshot().files, direct.files)
 
 
 if __name__ == "__main__":

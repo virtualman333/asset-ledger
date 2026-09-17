@@ -5,12 +5,12 @@
 
     python scripts/smoke_api.py
 
-要验一个已经在跑的服务：
+要验一个已经在跑的服务（脚本会先向它要 `/health/`，拿源码指纹比对「跑的是不是这份代码」）：
 
     python scripts/smoke_api.py --base http://127.0.0.1:8000
 
-地址为什么不再写死、以及 `--base` 模式下为什么脚本会声明自己无法自证，见
-`_smoke_lib.py` 的说明。本脚本会**真的写库**。
+地址为什么不再写死、`--base` 模式为什么要先做那次指纹核对（对不上就是一条 FAIL，并明说
+后面的失败不能当缺陷读），见 `_smoke_lib.py` 的说明。本脚本会**真的写库**。
 """
 import json
 import sys

@@ -164,13 +164,48 @@ python scripts/smoke_record_flow.py --base http://127.0.0.1:8000
 进程恰好是这份代码」这个约定撑着，而脚本对它一无所知：谁起的、什么时候起的、跑的是哪个
 提交。实测撞上过一个两天前起的旧进程：它的 `/analytics/summary/` 还是旧字段，26 条检查里
 5 条 FAIL —— **全是假缺陷**；随后脚本在 `summary["dividend_yield"]` 上 KeyError 中断，
-连失败小结都没打印出来。一次误诊，加一次「没有结论」。所以改成：**测的必须是这份代码**，
-由构造保证而不是靠约定；`--base` 模式下脚本会在开头声明它无法自证这一点。
+连失败小结都没打印出来。一次误诊，加一次「没有结论」。所以改成两条一起用：
+
+1. **默认自启**：不给 `--base` 就自己起一个只服务当前 checkout 的服务端 —— 「测的是这份
+   代码」由构造保证，不靠约定。
+2. **`--base` 必须先自证**：脚本先要一次 `/health/`，拿服务端**自己那份源码的内容指纹**与
+   本地现算一遍比对。一致才继续；对不上、或者对面压根没有这个端点（= 旧版本），当场记一条
+   FAIL 并写明「**下面的失败不能当缺陷读**」—— 声明拦不住误诊，比对才拦得住。
+   **自启模式也走同一条核对**，于是「起的是当前 checkout」也从「由构造保证」变成了
+   「被检查过」。
 
 两个脚本共用 `scripts/_smoke_lib.py`，它另外兜住一件事：body 里抛出的任何异常都折算成
 一条 FAIL，退出码永远由检查结果决定 —— 冒烟脚本不允许以「没有结论」收场。这些性质由
-`apps/core/tests/test_smoke_lib.py` 钉住，连同「`scripts/` 里的脚本」与「本节点名的脚本」
+`apps/core/tests/test_smoke_lib.py` 钉住（含指纹核对五种结局各走一遍），指纹本身的口径由
+`apps/core/tests/test_source_stamp.py` 钉住，连同「`scripts/` 里的脚本」与「本节点名的脚本」
 的双向一致（新脚本忘了写文档、或文档点着不存在的脚本，都会红）。
+
+### 服务端自证（`/api/v1/health/`）
+
+`GET /api/v1/health/`（**不需要认证**）报出服务端自己那份源码的内容指纹、它的启动时刻，
+以及「进程起来之后源码又被改过吗」：
+
+```json
+{"service": "asset-ledger", "pid": 1234, "started_at": "2026-09-17T03:09:47Z",
+ "uptime_seconds": 12.3,
+ "source": {"files": 93, "fingerprint": "bc3bdf4d…", "newest_file": "config/urls.py",
+            "newest_mtime": "2026-09-17T03:07:12Z", "unreadable": [],
+            "stale": false, "stale_files": []}}
+```
+
+两个机制都要，少一个就有一种误判漏过去：
+
+- **指纹**（相对路径 + 内容一起入哈希）答「是不是同一份代码」。入哈希前**行尾统一成 LF** ——
+  这不是可选的口味问题：同一份代码在 Windows（CRLF）与 Linux（LF）上必须算出同一个数，
+  否则跨机核对必然误报成「不同」。非 `.py`、`__pycache__`、`.venv` / `venv`（那里可能躺着
+  **另一份**被装进去的代码）都不算。
+- **`stale`** 答「这个进程是不是还在跑它自己那份代码」：先改文件、再发请求，指纹算的是磁盘上
+  **新**的内容，而进程跑的是**旧**代码 —— 只看指纹会把这一种判成「没问题」。这条只能服务端
+  自己判（两边各拿自己的时间戳比会撞上时钟偏差），所以启动时刻取的是**进程刚开始跑的那一刻**
+  （`AppConfig.ready()`），不是「第一个请求」。
+
+它暴露的信息只有「这确实是 asset-ledger」和源码的一个内容哈希 —— 源码本来就公开在仓库里；
+**绝对路径、`SECRET_KEY`、数据库连接串一律不放**。
 
 自启的进程连的是 `server/.env` 那个库，所以它会**真的写库**，和手工点一遍「记一笔」等价。
 
@@ -239,6 +274,7 @@ python -m unittest discover -s apps -t .
 
 ```
 POST /api/v1/auth/register|token|token/refresh    认证
+GET  /api/v1/health/                               版本自证（源码指纹，无需认证）
 GET/POST /api/v1/accounts/                         账户
 GET/POST /api/v1/assets/                           标的
 GET/POST /api/v1/transactions/records/             流水（支持 client_request_id 幂等）
@@ -295,3 +331,6 @@ GET  /api/v1/analytics/positions|summary|dividends|calendar
   其余进程只跑 Web 请求 —— 这是刻意的，否则每轮会被放大成 N 遍。
   多机部署时每台机器各有一个调度器（锁是**本机**的，别放到网络盘上）
 - 股息数据以手动录入与 Agent 识别为主，自动股息日历仍在 TODO
+- `/api/v1/health/` 的指纹在入哈希前把行尾统一成 LF，所以**「只改了行尾」不算改动** ——
+  这是刻意的（同一个提交在 Windows 与 Linux 上必须是同一个指纹），代价是它答不了
+  「行尾有没有被改坏」这类问题
