@@ -382,6 +382,92 @@ def body(base: str, report: Report) -> None:
     check("日历的 year 写错也回 400（解析只有一处）",
           r.status_code == 400, f"{r.status_code} {r.text[:160]}")
 
+    # 14. 导入 CSV —— 认的列名就是导出那一份，所以先拿**刚导出的东西**回导一遍。
+    #     这一段挡的是另一种失败：导出与导入各认一套列名，用户拿自己刚导出的文件回导，
+    #     被一屏「不认识的列名」挡住 —— 而两边各自看都没毛病（BOM 没吃掉、中文表头抄错
+    #     一个字、时间格式换了一种，都会走到这里）。
+    r = session.get(
+        f"{base}/transactions/records/export/",
+        params={"from": EXPORT_FROM, "to": EXPORT_TO}, headers=headers,
+    )
+    exported = r.text
+    exported_rows = len([ln for ln in exported.split("\r\n") if ln != ""]) - 1  # 减掉表头
+    check("回导用的样本非空（导出确实拿到了行，往返才有意义）",
+          r.status_code == 200 and exported_rows >= 1,
+          f"{r.status_code} 导出行数={exported_rows}")
+    r = session.post(
+        f"{base}/transactions/records/import/",
+        json={"csv": exported, "dry_run": True}, headers=headers,
+    )
+    roundtrip = r.json() if r.status_code == 200 else {}
+    check("★ 自己导出的文件自己导得回来（BOM / CRLF / 中文表头 / 方向标签 / 时间格式一起过）",
+          r.status_code == 200 and roundtrip.get("created") == exported_rows
+          and roundtrip.get("failed") == [],
+          f"{r.status_code} {json.dumps(roundtrip, ensure_ascii=False)[:240]}")
+
+    # 15. 真导一批：一行合法 + 一行账户不存在 + 一行时间写错。
+    #     要验的是「行级失败不整批回滚」，以及**每一行都指得回文件里的行号**。
+    #
+    #     标记与幂等前缀都带时间戳：这个脚本会被反复跑，写死的标记会让第二次跑
+    #     撞上「上一次导进来的那一条」，于是「1 条成功」变成「0 条成功」——
+    #     一个只在第二次跑才出现的假失败，最难查。
+    STAMP = time.strftime("%Y%m%d%H%M%S")
+    IMPORT_MARK = f"冒烟导入-{STAMP}"
+    IMPORT_PREFIX = f"smoke-import-{STAMP}"
+    import_csv = "".join([
+        "时间,方向,账户,币种,现金变动,备注\r\n",
+        f"2027-01-03 09:00:00,入金,冒烟账户,CNY,1234.5,{IMPORT_MARK}\r\n",
+        "2027-01-03 09:00:00,入金,这个账户不存在,CNY,1,冒烟导入-不该进来\r\n",
+        "2027-13-99 09:00:00,入金,冒烟账户,CNY,1,冒烟导入-时间写错\r\n",
+    ])
+    r = session.post(
+        f"{base}/transactions/records/import/",
+        json={"csv": import_csv, "client_request_id_prefix": IMPORT_PREFIX}, headers=headers,
+    )
+    imported = r.json() if r.status_code == 200 else {}
+    check("导入一批：1 条成功、2 条失败（行级失败不整批回滚）",
+          r.status_code == 200 and imported.get("created") == 1
+          and imported.get("ok") is False and len(imported.get("failed") or []) == 2,
+          f"{r.status_code} {json.dumps(imported, ensure_ascii=False)[:240]}")
+    check("导入的失败行指得回**文件里的行号**（表头是第 1 行）",
+          [f.get("line") for f in (imported.get("failed") or [])] == [3, 4],
+          json.dumps(imported.get("failed"), ensure_ascii=False)[:240])
+    check("账户不存在的那条把话说清楚了（不是「invalid」）",
+          any("这个账户不存在" in str(f.get("error", "")) for f in (imported.get("failed") or [])),
+          json.dumps(imported.get("failed"), ensure_ascii=False)[:240])
+
+    r = session.get(f"{base}/transactions/records/", params={"search": IMPORT_MARK}, headers=headers)
+    rows = report.field(r.json(), "results", []) or []
+    got = rows[0] if rows else {}
+    # 金额按数值比，不按字符串比：`amount` 是 `DECIMAL(24,8)`，序列化出来是
+    # `1234.50000000`。字符串断言会把「小数位有多长」当成契约，那是另一件事。
+    check("导进来的那条：金额按 side 归一（入金 1234.5 → +1234.5）",
+          r.status_code == 200 and len(rows) == 1
+          and got.get("amount") is not None
+          and Decimal(str(got.get("amount"))) == Decimal("1234.5"),
+          f"{r.status_code} {json.dumps(got, ensure_ascii=False)[:200]}")
+    check("导进来的那条：来源是「导入」（不是文件里那一列说了什么）",
+          got.get("source") == "IMPORT", f"source={got.get('source')!r}")
+    check("备注里的公式前缀被还原（导出加的单引号没有留下）",
+          got.get("note") == IMPORT_MARK, f"note={got.get('note')!r}")
+
+    r2 = session.post(
+        f"{base}/transactions/records/import/",
+        json={"csv": import_csv, "client_request_id_prefix": IMPORT_PREFIX}, headers=headers,
+    )
+    again = r2.json() if r2.status_code == 200 else {}
+    check("带同一前缀再导一次：不重复记账，报成 skipped",
+          r2.status_code == 200 and again.get("created") == 0 and again.get("skipped") == 1,
+          f"{r2.status_code} {json.dumps(again, ensure_ascii=False)[:200]}")
+
+    r = session.post(
+        f"{base}/transactions/records/import/",
+        json={"csv": "时间,方向,账户,币种,我没这列\r\n2027-01-03 09:00:00,入金,冒烟账户,CNY,x\r\n"},
+        headers=headers,
+    )
+    check("列名认不出是**文件级**问题 → 400（不静默忽略，也不回「成功 0 条」）",
+          r.status_code == 400 and "我没这列" in r.text, f"{r.status_code} {r.text[:200]}")
+
 
 
 
