@@ -162,7 +162,7 @@ footer{border-top:1px solid var(--border);padding:34px 0 46px;margin-top:24px}
 
 <main>
   <div class="wrap hero">
-    <span class="eyebrow">●  原生鸿蒙 + Django · v0.3.0</span>
+    <span class="eyebrow">●  原生鸿蒙 + Django · v0.4.0</span>
     <h1>股息视角的多市场投资资产记录</h1>
     <p class="lead">券商截图、成交短信直接丢给 Agent，识别成草稿，确认才入账。持仓、成本、盈亏、股息全部由流水推导 —— 流水是唯一事实源。</p>
     <div class="cta"><a class="btn btn-primary" href="https://github.com/virtualman333/asset-ledger">在 GitHub 上查看 →</a><a class="btn btn-ghost" href="https://github.com/virtualman333/asset-ledger/tree/main/docs">设计文档</a></div>
@@ -171,11 +171,11 @@ footer{border-top:1px solid var(--border);padding:34px 0 46px;margin-top:24px}
 
   <section id="features"><div class="wrap">
     <div class="sec-head"><h2>核心能力</h2><p>从实际使用出发，而不是从功能清单出发</p></div>
-    <div class="grid"><div class="card"><span class="ico">📸</span><h3>一句话记账</h3><p>券商截图 / 成交短信丢给 Agent，多模态识别成草稿，一键确认入账；低置信度或缺字段强制标红补全。</p></div><div class="card"><span class="ico">🌍</span><h3>多市场统一口径</h3><p>A 股 / 港股 / 美股 / 基金 / 外汇 / 数字货币，移动加权成本 + XIRR 年化 + 多币种折算。</p></div><div class="card"><span class="ico">📈</span><h3>行情自己更新</h3><p>后端每 15 分钟抓一轮（腾讯 / OKX / Yahoo），写入口只有一处；拿不到报价的持仓按成本计入总资产并点名是哪几个标的 —— 不会静默变成 0。</p></div><div class="card"><span class="ico">📜</span><h3>流水是唯一事实源</h3><p>持仓、成本、盈亏、股息全部由流水推导，不存第二份真相。</p></div><div class="card"><span class="ico">💵</span><h3>股息不只记账</h3><p>股息记录 + 股息率（近一年股息 ÷ 成本）+ 月度被动收入 + 月度分布 + 股息日历。同一笔股息在持仓、总览、月度分布、导出**四处只有一个口径**，不会各算各的。</p></div><div class="card"><span class="ico">📤</span><h3>导出流水与股息</h3><p>两份 CSV 都能导：流水 14 列、股息 13 列。BOM、CRLF、公式注入防护、中文文件名四件事共用同一层实现，所以两个文件放进同一个 Excel 行为逐字一致。</p></div><div class="card"><span class="ico">🔒</span><h3>原始凭证永不硬删</h3><p>每笔 Agent 入账的流水都能回溯到截图与识别原文。</p></div><div class="card"><span class="ico">📱</span><h3>原生鸿蒙客户端</h3><p>HarmonyOS NEXT + ArkTS/ArkUI，relationalStore 本地缓存，品牌紫 #7166F0。</p></div></div>
+    <div class="grid"><div class="card"><span class="ico">📸</span><h3>一句话记账</h3><p>券商截图 / 成交短信丢给 Agent，多模态识别成草稿，一键确认入账；低置信度或缺字段强制标红补全。</p></div><div class="card"><span class="ico">🌍</span><h3>多市场统一口径</h3><p>A 股 / 港股 / 美股 / 基金 / 外汇 / 数字货币，移动加权成本 + XIRR 年化 + 多币种折算。</p></div><div class="card"><span class="ico">📈</span><h3>行情自己更新</h3><p>后端每 15 分钟抓一轮（腾讯 / OKX / Yahoo），写入口只有一处；拿不到报价的持仓按成本计入总资产并点名是哪几个标的 —— 不会静默变成 0。</p></div><div class="card"><span class="ico">📜</span><h3>流水是唯一事实源</h3><p>持仓、成本、盈亏、股息全部由流水推导，不存第二份真相。</p></div><div class="card"><span class="ico">💵</span><h3>股息不只记账</h3><p>股息记录 + 股息率（近一年股息 ÷ 成本）+ 月度被动收入 + 月度分布 + 股息日历。同一笔股息在持仓、总览、月度分布、导出**四处只有一个口径**，不会各算各的。</p></div><div class="card"><span class="ico">📤</span><h3>导出流水与股息</h3><p>两份 CSV 都能导：流水 14 列、股息 13 列。BOM、CRLF、公式注入防护、中文文件名四件事共用同一层实现，所以两个文件放进同一个 Excel 行为逐字一致。</p></div><div class="card"><span class="ico">🔒</span><h3>原始凭证永不硬删</h3><p>每笔 Agent 入账的流水都能回溯到截图与识别原文。</p></div><div class="card"><span class="ico">🧷</span><h3>跨端契约有人守</h3><p>客户端打的每个接口路径都对着服务端真路由表核一遍；页面清单、import 落点、默认后端地址也都由契约检查钉住 —— 本机编译不了鸿蒙工程，这些不变式只能靠读源码守住。</p></div><div class="card"><span class="ico">📱</span><h3>原生鸿蒙客户端</h3><p>HarmonyOS NEXT + ArkTS/ArkUI，relationalStore 本地缓存，品牌紫 #7166F0。</p></div></div>
   </div></section>
 
   <section id="stack"><div class="wrap">
-    <div class="sec-head"><h2>技术栈</h2><p>最新版本：v0.3.0</p></div>
+    <div class="sec-head"><h2>技术栈</h2><p>最新版本：v0.4.0</p></div>
     <div class="pills"><span class="pill">HarmonyOS NEXT</span><span class="pill">ArkTS / ArkUI</span><span class="pill">Django 5.2</span><span class="pill">DRF</span><span class="pill">SimpleJWT</span><span class="pill">MySQL 8.4</span><span class="pill">APScheduler</span><span class="pill">多源行情</span></div>
   </div></section>
 
