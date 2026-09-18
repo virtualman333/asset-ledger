@@ -5,13 +5,23 @@ import { common } from '@kit.AbilityKit';
 const TOKEN_KEY: string = 'jwt_access';
 const STORE_NAME: string = 'asset_ledger';
 
+/**
+ * 默认后端地址 —— **全客户端只有这一处**。
+ *
+ * 它原先在 `ApiClient.getBaseUrl()` 和 `EntryAbility.onCreate()` 里各写了一遍，
+ * 靠两条测试钉住「两份一致」（本机没有 DevEco / hvigor 工具链，改 `.ets` 编译不了，
+ * 改坏了只有真机跑起来才知道）。现在 `EntryAbility` import 这个常量，
+ * 「一致」不再需要被检查 —— 只有一处可改。
+ */
+export const DEFAULT_API_BASE_URL: string = 'http://10.0.2.2:8000/api/v1';
+
 /** 后端接口封装：统一注入 JWT、解析响应、抛出可读错误。 */
 export class ApiClient {
   static token: string = '';
 
   static getBaseUrl(): string {
     const url = AppStorage.get<string>('apiBaseUrl');
-    return url ? url : 'http://10.0.2.2:8000/api/v1';
+    return url ? url : DEFAULT_API_BASE_URL;
   }
 
   private static getStore(): preferences.Preferences | undefined {

@@ -48,22 +48,24 @@ README 用 `A|B` 压行（`/api/v1/auth/register|token|token/refresh`），展�
 
 跑法（在 server/ 下）：python -m unittest discover -s apps -t .
 """
-import ast
 import re
 import unittest
 from pathlib import Path
 
-#: 本文件在 `server/apps/core/tests/` 下 —— 往上第三层才是 `server/`（跑测试的 cwd）
-SERVER = Path(__file__).resolve().parents[3]
-assert (SERVER / "manage.py").exists(), f"算错了 server 根：{SERVER} 下没有 manage.py"
+from apps.core.client_inventory import declared_base_url  # noqa: E402
+from apps.core.route_inventory import (  # noqa: E402
+    ROOT,
+    SERVER,
+    norm,
+    real_routes,
+    root_includes,
+    with_slash as _with_slash,
+)
 
-#: 仓库根
-ROOT = SERVER.parent
-assert (ROOT / "README.md").exists(), f"算错了仓库根：{ROOT} 下没有 README.md"
-
+#: `SERVER` / `ROOT` 由 `apps.core.route_inventory` 算出来并在 import 时自证 ——
+#: 定位这种事只该有一份算法，两份就是两份会漂的东西（路由解析器挪过去也是同一个理由）。
 README = ROOT / "README.md"
 DESIGN = ROOT / "docs" / "DESIGN.md"
-ROOT_URLCONF = SERVER / "config" / "urls.py"
 
 #: README 里那份手抄清单所在的章节名。它同时是 `docs/DESIGN.md` 草案上那个指针的落点
 #: —— 指针指向一个**真的存在**的章节，所以它不是一句空话。
@@ -87,7 +89,8 @@ BACKTICK_URL_RE = re.compile(r"`([a-z][a-z0-9+.-]*://[^`\n]*)`")
 #: `.ets` 里用单引号括起来的带协议头字符串字面量
 URL_LITERAL_RE = re.compile(r"'([a-z][a-z0-9+.-]*://[^'\n]*)'")
 
-#: 客户端默认后端地址的真值所在（同一个字面量现在写了两遍）
+#: 客户端默认后端地址的真值所在。它**只有这一处定义**（`DEFAULT_API_BASE_URL`），
+#: `EntryAbility` import 它 —— 见下面 `TestClientDefaultUrlMatchesTheDocs`。
 CLIENT_DEFAULT_SOURCES = {
     "ApiClient": ROOT / "harmony/entry/src/main/ets/common/ApiClient.ets",
     "EntryAbility": ROOT / "harmony/entry/src/main/ets/entryability/EntryAbility.ets",
@@ -96,82 +99,6 @@ CLIENT_DEFAULT_SOURCES = {
 #: 解析器在真仓库上至少要解出这么多条，否则说明扫描面塌了（下面有自证用例）
 MIN_EXPLICIT_ROUTES = 12
 MIN_DOCUMENTED_PATHS = 15
-
-
-def _call_name(node):
-    """`path(...)` → `'path'`；`admin.site.urls` → `'urls'`；其它 → None。"""
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return None
-
-
-def _str_const(node):
-    """字符串字面量取原值，其它一律 None（f-string、拼接都不认 —— 认了就变成猜）。"""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    return None
-
-
-def root_includes():
-    """根 urlconf 里的 `(前缀, 目标模块)`，只认 `path("...", include("a.b.urls"))`。"""
-    tree = ast.parse(ROOT_URLCONF.read_text(encoding="utf-8"))
-    found = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or _call_name(node.func) != "path":
-            continue
-        if len(node.args) < 2:
-            continue
-        prefix = _str_const(node.args[0])
-        target = node.args[1]
-        if prefix is None or not isinstance(target, ast.Call):
-            continue
-        if _call_name(target.func) != "include" or not target.args:
-            continue
-        module = _str_const(target.args[0])
-        if module is not None:
-            found.append((prefix, module))
-    return found
-
-
-def app_urls_file(module):
-    """`apps.users.urls` → `server/apps/users/urls.py`"""
-    return SERVER / Path(*module.split(".")).with_suffix(".py")
-
-
-def parse_app_urls(path):
-    """某个 app 的 `urls.py`：返回 `(显式 path 的子路径, router 注册的前缀)`。"""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    explicit, routers = [], []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not node.args:
-            continue
-        name = _call_name(node.func)
-        sub = _str_const(node.args[0])
-        if sub is None:
-            continue
-        if name == "path":
-            explicit.append(sub)
-        elif name == "register":
-            routers.append(sub)
-    return explicit, routers
-
-
-def _with_slash(path):
-    return path if path.endswith("/") else path + "/"
-
-
-def norm(path):
-    """把路径归一成「同一件事的同一个写法」：去掉查询串与前导 `/`、占位段统一成 `{id}`。
-
-    真值写 `<int:pk>`、文档写 `{id}`；文档写 `/api/v1/...`、根 urlconf 写 `api/v1/...`
-    —— 不归一就会把同一段路径判成两条，正向和反向各红一片假缺陷。
-    """
-    cleaned = path.split("?")[0].lstrip("/")
-    cleaned = re.sub(r"<[^>]*>", "{id}", cleaned)
-    cleaned = re.sub(r"\{[^}]*\}", "{id}", cleaned)
-    return cleaned
 
 
 def expand_alternatives(token):
@@ -208,25 +135,6 @@ def documented_paths(text=None):
             continue
         found.update(norm(p) for p in expand_alternatives(fields[1]))
     return found
-
-
-def real_routes():
-    """`(显式 path, router 集合 URL, router 明细 URL)`，三份都带 `/api/` 前缀且已归一。"""
-    explicit, collections, details = set(), set(), set()
-    for prefix, module in root_includes():
-        if not prefix.startswith("api/"):
-            continue  # `admin/` 不是面向客户端的接口面
-        path = app_urls_file(module)
-        if not path.exists():
-            raise AssertionError(f"根 urlconf include 了一个不存在的模块：{module} → {path}")
-        subs, routers = parse_app_urls(path)
-        for sub in subs:
-            explicit.add(norm(prefix + sub))
-        for registered in routers:
-            collection = _with_slash(prefix + registered)
-            collections.add(norm(collection))
-            details.add(norm(collection + "{id}/"))
-    return explicit, collections, details
 
 
 def _documented_simulator_url():
@@ -389,12 +297,17 @@ class TestTheDraftIsMarkedAsSuperseded(unittest.TestCase):
 
 
 class TestClientDefaultUrlMatchesTheDocs(unittest.TestCase):
-    """README 说模拟器地址「默认已填」。真值在两个 `.ets` 文件里：`ApiClient.getBaseUrl()`
-    的兜底字面量，与 `EntryAbility.onCreate()` 预置进 `AppStorage` 的那个。
+    """README 说模拟器地址「默认已填」。真值在客户端的 `DEFAULT_API_BASE_URL` 里。
 
-    同一件事在客户端写了两遍。本机没有 DevEco / hvigor 工具链，改 `.ets` 无法自测
-    （改坏了只有真机跑起来才知道），所以这一轮不收敛它，先把两边钉在一起：谁改了一处、
-    忘了另一处，这条就红，并直接告诉你该收敛成单一常量。
+    这一条**上一轮是「两份一致」的检查**：那个字面量在 `ApiClient.getBaseUrl()` 的兜底
+    分支和 `EntryAbility.onCreate()` 里各写了一遍，而本机没有 DevEco / hvigor 工具链，
+    改 `.ets` 无法自测（改坏了只有真机跑起来才知道），所以当时先把两边钉住、并在 README
+    的「已知约束」里写明该怎么收敛。这一轮按那条指示收敛了：常量在 `ApiClient.ets` 里
+    `export`，`EntryAbility.ets` import 它。
+
+    于是**「两份一致」不再是需要被检查的事** —— 只有一处可改。剩下的两条断言是：
+    README 说的地址与那一处一致；`EntryAbility` 里不许再长出第二个 URL 字面量
+    （那正是这次要消灭的形状）。
     """
 
     @classmethod
@@ -403,31 +316,50 @@ class TestClientDefaultUrlMatchesTheDocs(unittest.TestCase):
             name: URL_LITERAL_RE.findall(path.read_text(encoding="utf-8"))
             for name, path in CLIENT_DEFAULT_SOURCES.items()
         }
+        cls.entry_ability = CLIENT_DEFAULT_SOURCES["EntryAbility"].read_text(encoding="utf-8")
 
     def test_the_documented_default_is_the_one_the_client_uses(self):
         documented = _documented_simulator_url()
         self.assertEqual(
-            self.literals["ApiClient"], [documented],
-            "README 说的默认地址与 ApiClient.getBaseUrl() 的兜底值不一致：\n  README: %r\n"
-            "  ApiClient: %r\n" % (documented, self.literals["ApiClient"]),
+            declared_base_url(), documented,
+            "README 说的默认地址与客户端的 DEFAULT_API_BASE_URL 不一致：\n"
+            "  README: %r\n  客户端: %r\n" % (documented, declared_base_url()),
         )
 
-    def test_the_two_copies_agree(self):
+    def test_the_default_address_is_declared_exactly_once(self):
+        """收敛之后，全客户端只该有**一个**带协议头的字面量，就在 ApiClient.ets 里。
+
+        `declared_base_url()` 自己会在「不是恰好一处」时抛异常（找不到 ≠ 找到了对的），
+        这里再对字面量总数同一件事收一遍：`EntryAbility` 里再冒出第二个 URL，
+        本条直接红 —— 那是「同一件事写两处」这个形状又回来了。
+        """
+        declared_base_url()  # 声明恰好一处，否则它自己先炸
         self.assertEqual(
-            self.literals["EntryAbility"], self.literals["ApiClient"],
-            "同一个默认地址在 EntryAbility 与 ApiClient 里写成了不同的值：\n"
-            "  EntryAbility: %r\n  ApiClient: %r\n"
-            "该收敛成一个常量了 —— 在 `ApiClient.ets` 里 export 一个 `DEFAULT_API_BASE_URL`，"
-            "`EntryAbility.ets` import 它。注意本机没有鸿蒙工具链，改完要在 DevEco 里过一遍编译。"
-            % (self.literals["EntryAbility"], self.literals["ApiClient"]),
+            self.literals["EntryAbility"], [],
+            "EntryAbility 里又出现了 URL 字面量：%r\n"
+            "默认地址的唯一定义在 `common/ApiClient.ets` —— 这边应当 import "
+            "`DEFAULT_API_BASE_URL`，而不是再抄一遍。" % (self.literals["EntryAbility"],),
         )
 
-    def test_the_scan_surface_is_intact(self):
-        for name, hits in self.literals.items():
-            self.assertEqual(
-                len(hits), 1,
-                f"{name} 里带协议头的字面量不是恰好一条：{hits!r} —— 提取规则该跟着改了",
-            )
+    def test_entry_ability_really_uses_that_constant(self):
+        """光把字面量删掉不算收敛：得**真的把它当值用上**。
+
+        第一版写的是 `assertIn("DEFAULT_API_BASE_URL", text)` —— 负向验证当场证明它太松：
+        把 `AppStorage.setOrCreate` 那一行的值换回字面量，上面那行 `import` 里还留着
+        这个名字，于是它照样绿。提到名字不等于用了它（删掉值、只留 import 也是「提到」），
+        所以这里直接钉住那句赋值。
+        """
+        self.assertRegex(
+            self.entry_ability,
+            r"AppStorage\s*\.\s*setOrCreate<string>\s*\(\s*'apiBaseUrl'\s*,\s*DEFAULT_API_BASE_URL\s*\)",
+            "EntryAbility 没有把 DEFAULT_API_BASE_URL 真的写进 ApiClient 读的那个键 —— "
+            "把字面量删掉却没接上单一来源，等于把默认地址弄丢了"
+            "（AppStorage 里 'apiBaseUrl' 会一直是空的）。",
+        )
+        self.assertIn(
+            "../common/ApiClient", self.entry_ability,
+            "EntryAbility 没有从 ../common/ApiClient 把常量 import 进来。",
+        )
 
 
 if __name__ == "__main__":

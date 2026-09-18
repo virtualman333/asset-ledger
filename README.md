@@ -131,6 +131,25 @@ scripts/   冒烟测试等工具脚本
 每条本地 import 都落到磁盘、import 进来的组件真的被用到、`main_pages.json` 登记的页面
 都存在且入口页在里面。改 Tab 栏就得改这张表，反之亦然，否则自测红。
 
+## 客户端打了哪些接口
+
+客户端 `.ets` 里打出去的每个路径，都由 `apps/core/tests/test_client_route_contract.py`
+对着服务端**真路由表**核一遍。真值不是手抄的：`apps/core/route_inventory.py` 用 AST 读
+`config/urls.py` 与各 app 的 `urls.py`（不 import Django、不连库），README 那份手抄的
+「主要接口」清单用的也是它 —— 一份解析器，两个消费者。
+
+这一面原先完全没人看，而它是最看不见的一面：本机没有 DevEco / hvigor 工具链，`.ets`
+**编译不了**，路径写错不会在这里报任何错；就算上了真机，后果也只是那个页面永远转圈
+（404 被界面吃成一句「加载失败」）。更糟的是接口改名 —— 代码侧一切正常，只有页面在转圈。
+
+解析面用**两遍扫描逐文件对账**：宽扫认得出任何 `ApiClient.<动词>(` 的调用形态（泛型、
+跨行都算），窄扫只认紧跟其后的字面量路径，**两者命中数必须相等**。某一处路径换成了变量，
+那一处就是「没被检查」，不该因为同文件别处读得出来而被放过 —— 这是负向验证当场教出来的：
+第一版只要求「窄扫至少一条」，把其中一个路径换成变量时它照样绿。
+
+只钉一个方向，是刻意的：客户端打的路径必须存在；服务端存在的路由客户端有没有打，**不查**
+（接口给别的客户端用、或还没有页面接入，都不是缺陷）。
+
 ## 快速开始
 
 后端：
@@ -510,16 +529,20 @@ GET  /api/v1/analytics/dividends/export/           股息导出 CSV（与「累�
   其余进程只跑 Web 请求 —— 这是刻意的，否则每轮会被放大成 N 遍。
   多机部署时每台机器各有一个调度器（锁是**本机**的，别放到网络盘上）
 - 股息数据以手动录入与 Agent 识别为主。日历（`analytics/calendar/`）拼的是**已录入的股息**，「抓公告自动生成未来的派息日」仍在 TODO
-- 客户端默认后端地址（`10.0.2.2:8000`）在 `ApiClient.ets` 与 `EntryAbility.ets` 里**各写了
-  一遍**；本机没有 DevEco / hvigor 工具链，编译不出来，所以先由
-  `test_api_surface_contract.py` 钉住「两份一致、且与上面那句 README 一致」。真要收敛就
-  在 `ApiClient.ets` export 一个 `DEFAULT_API_BASE_URL`、让 `EntryAbility.ets` import 它
+- 客户端默认后端地址（`10.0.2.2:8000`）**现在只有一处定义**：`common/ApiClient.ets` 里的
+  `DEFAULT_API_BASE_URL`，`EntryAbility.ets` import 它（原先两处各写一遍）。本机没有
+  DevEco / hvigor 工具链，编译不出来，所以改这个地址时只有两条自测兜着：
+  `test_api_surface_contract.py` 钉住「README 运行环境表里的模拟器地址 = 那一处声明」，
+  并且 `EntryAbility` 里**不许再长出第二个 URL 字面量**、且必须真的把常量写进
+  `AppStorage`（「提到名字」不算用了它 —— 这是负向验证教出来的）。改地址记得在 DevEco 里过一遍编译
 - 承接上一条：本机没有鸿蒙工具链，`.ets` 的正确性**只**能靠读源码的契约检查兜底。目前
-  钉住的只有「客户端页面清单 / import 落点 / 路由登记」（`test_client_pages_contract.py`，
+  钉住的是三面 —— 「客户端页面清单 / import 落点 / 路由登记」（`test_client_pages_contract.py`，
   其中 import 那一面覆盖具名 / 默认 / 命名空间 / 只为副作用**四种写法**，并且额外拿一个宽扫
-  给**解析面自己**对账 —— 出现第五种写法会直接红，而不是静默漏过）
-  与「默认后端地址两处一致」（`test_api_surface_contract.py`）——**这两条没覆盖到的 `.ets`
-  改动，自测一律看不见**。加 Tab、加页面、改 import 时，记得把新的不变式也一并钉住，
+  给**解析面自己**对账 —— 出现第五种写法会直接红，而不是静默漏过）、
+  「默认后端地址只有一处且被真的用上」（`test_api_surface_contract.py`）、
+  以及「客户端打的每个接口路径都真实存在」（`test_client_route_contract.py`，
+  同样是宽窄两遍逐文件对账）——**这三面没覆盖到的 `.ets` 改动，自测一律看不见**。
+  加 Tab、加页面、改 import、加接口调用时，记得把新的不变式也一并钉住，
   否则下次就轮到它静默漂移
 - `/api/v1/health/` 的指纹在入哈希前把行尾统一成 LF，所以**「只改了行尾」不算改动** ——
   这是刻意的（同一个提交在 Windows 与 Linux 上必须是同一个指纹），代价是它答不了
