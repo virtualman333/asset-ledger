@@ -198,6 +198,37 @@ class DetailFieldTest(unittest.TestCase):
         self.assertEqual(entry.amount, ZERO)
 
 
+class IdentityTest(unittest.TestCase):
+    """条目要能回指到它来的那一行 —— 两条录入路径各有一个 id。
+
+    `record_id` / `transaction_id` 存在的理由很具体：股息日历要把用户点回那一条记录。
+    旧日历给的是 `DividendRecord.id`，而**纯流水录入的股息根本没有这个 id** ——
+    字段留着就等于继续暗示「日历里的东西都是明细」（本轮换源时一起改了）。
+
+    与明细字段同一条规矩：**缺就是 None，不是 0**。
+    """
+
+    def test_明细录入的条目带着自己的id(self):
+        entry = collect_dividends([dict(record(), id=31)], [])[0]
+        self.assertEqual(entry.record_id, 31)
+        self.assertIsNone(entry.transaction_id, "这条明细没关联流水，就不该有这个 id")
+
+    def test_明细关联了流水时两个id都在(self):
+        entry = collect_dividends([dict(record(transaction_id=88), id=32)], [])[0]
+        self.assertEqual((entry.record_id, entry.transaction_id), (32, 88))
+
+    def test_流水录入的条目没有record_id(self):
+        """★ 它只有流水 id —— 谁按 `record_id` 去取明细都会取到空气。"""
+        entry = collect_dividends([], [tx(rid=99, amount="77.25")])[0]
+        self.assertIsNone(entry.record_id)
+        self.assertEqual(entry.transaction_id, 99)
+
+    def test_数据里没有id键时是None(self):
+        entry = collect_dividends([record()], [])[0]
+        self.assertIsNone(entry.record_id)
+        self.assertIsNone(entry.transaction_id)
+
+
 class GroupTest(unittest.TestCase):
     """分组口径 —— 持仓与统计必须由同一份聚合喂出来。"""
 

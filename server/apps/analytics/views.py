@@ -4,10 +4,6 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.models import Account
-from apps.assets.models import Asset
-from apps.transactions.models import DividendRecord
-
 from .dividend_export import (
     DIVIDEND_CSV_COLUMNS,
     content_disposition,
@@ -15,12 +11,14 @@ from .dividend_export import (
     export_names,
     render_rows,
 )
+from .dividend_calendar import build_calendar
 from .services import (
     YearParamError,
     build_positions,
     build_summary,
-    dividend_entries,
+    dividend_entries_in_year,
     dividend_monthly,
+    dividend_refs,
     parse_year,
 )
 
@@ -69,6 +67,8 @@ class DividendExportView(APIView):
     `?year=2026` 与 `/analytics/dividends/` 同口径（按派息日）；不传就是全部年份。
     给了 year 时，派息日缺失的条目不计入 —— 与月度分布图一致（「日期未知」与
     「日期不在这一年」是两件事，混起来会让口径悄悄变宽）。
+    筛选只有一处（`services.dividend_entries_in_year`），日历与它共用：两个出口
+    各筛各的，就会出现「图表按 2026 筛、日历按别的东西筛」，而用户是拿这两个数对账的。
 
     为什么流式吐：账本条数不该决定内存，也不能因为「行数太多」就静默截断 ——
     截掉一部分的账目比慢一点严重得多。
@@ -77,26 +77,8 @@ class DividendExportView(APIView):
     def get(self, request):
         year = _year_param(request)
 
-        entries = dividend_entries(request.user)
-        if year is not None:
-            entries = [e for e in entries if e.pay_date is not None and e.pay_date.year == year]
-
-        # 只取这份文件里真正用到的 id：标的库是**全局**的（`AssetViewSet` 不按用户隔离），
-        # 全表拉进来没有必要；账户按用户隔离，必须带 user 条件 —— 漏了那个条件就导出了
-        # 别人的账户名，而且不会有任何报错。
-        assets = {
-            a.id: (a.symbol, a.name)
-            for a in Asset.objects.filter(
-                id__in={e.asset_id for e in entries if e.asset_id is not None}
-            )
-        }
-        accounts = {
-            a.id: a.name
-            for a in Account.objects.filter(
-                user=request.user,
-                id__in={e.account_id for e in entries if e.account_id is not None},
-            )
-        }
+        entries = dividend_entries_in_year(request.user, year)
+        assets, accounts = dividend_refs(request.user, entries)
 
         rows = (dividend_row(entry, assets, accounts, DIVIDEND_CSV_COLUMNS) for entry in entries)
 
@@ -109,26 +91,46 @@ class DividendExportView(APIView):
 
 
 class CalendarView(APIView):
-    """股息日历：除权日/派息日提醒。"""
+    """`GET /analytics/calendar/`：股息日历 —— DESIGN §4.5 的「除权日/派息日提醒」。
+
+    **数据来源是归集后的股息，不是 `DividendRecord` 列表。** 以前这里直接查明细表，
+    于是「只落流水、没有明细」的那条录入路径（`/transactions/records/` side=DIVIDEND）
+    在日历里**一条都不出现** —— 而同一个账户的「累计股息」把它算进去了。这是本轮真的
+    跑出来的缺陷：那笔股息在导出 CSV 与总览里都在，只有日历里没有，两边都不报错。
+
+    `?year=` 与 `/analytics/dividends/`、导出接口同口径（按派息日；不传就是全部年份）：
+    解析只有一处（`services.parse_year`，写错回 400），筛选只有一处
+    （`services.dividend_entries_in_year`）。
+
+    返回三组 + 合计，三组的分法写在 `dividend_calendar` 的模块说明里：
+
+    | 组 | 判据 |
+    | --- | --- |
+    | `upcoming` | 派息日在今天之后（`days_until > 0`），按日期升序 —— 「提醒」就是它 |
+    | `received` | 派息日在今天当天或之前（今天派的算已到账），倒序 |
+    | `undated` | 派息日为空的条目；既不进待派也不进已到账，但必须报出来 |
+
+    `totals` 里「待派 + 已到账 + 日期未知」逐币种相加等于 `by_currency` —— 少一组能
+    当场看出来。分币种而不是加总：CNY 与 USD 加在一起是个没有意义的数。折算过的合计
+    在 `summary.dividend_total` 里，那个才是折算到基准货币的。
+
+    标的与账户名字由这里补（`dividend_refs` 只取这份结果里用到的 id）：名字查不到时是
+    空串，不是缺字段 —— 与 `build_positions` 的 `account_name` 同一个写法。
+    这一版换掉了旧的 `{"results": [...]}` 形状：那形状里的 `id` 是 `DividendRecord`
+    的主键，纯流水录入的股息**没有**这个 id，留着它等于继续暗示「日历里的东西都是明细」。
+    两个客户端都还没消费这个接口（`harmony/` 里没有 calendar 的调用）。
+    """
 
     def get(self, request):
-        rows = (
-            DividendRecord.objects.filter(user=request.user)
-            .select_related("asset")
-            .order_by("pay_date")
-        )
-        data = [
-            {
-                "id": row.id,
-                "asset": row.asset.symbol,
-                "asset_name": row.asset.name,
-                "ex_date": row.ex_date.isoformat() if row.ex_date else None,
-                "pay_date": row.pay_date.isoformat() if row.pay_date else None,
-                "net": str(row.net),
-                "gross": str(row.gross),
-                "currency": row.currency,
-                "reinvested": row.reinvested,
-            }
-            for row in rows
-        ]
-        return Response({"results": data})
+        year = _year_param(request)
+        entries = dividend_entries_in_year(request.user, year)
+        assets, accounts = dividend_refs(request.user, entries)
+
+        payload = build_calendar(entries, timezone.localdate())
+        for group in ("upcoming", "received", "undated"):
+            for item in payload[group]:
+                symbol, name = assets.get(item["asset_id"], ("", ""))
+                item["symbol"] = symbol
+                item["asset_name"] = name
+                item["account_name"] = accounts.get(item["account_id"], "")
+        return Response(payload)

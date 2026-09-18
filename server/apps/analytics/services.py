@@ -64,6 +64,7 @@ def dividend_entries(user) -> list:
     """
     records = [
         {
+            "id": row.id,
             "asset_id": row.asset_id,
             "account_id": row.account_id,
             "net": row.net,
@@ -78,6 +79,7 @@ def dividend_entries(user) -> list:
             "reinvested": row.reinvested,
         }
         for row in DividendRecord.objects.filter(user=user).only(
+            "id",
             "asset_id",
             "account_id",
             "net",
@@ -106,6 +108,47 @@ def dividend_entries(user) -> list:
         )
     ]
     return collect_dividends(records, dividend_txs)
+
+
+def dividend_entries_in_year(user, year):
+    """归集后的股息，筛到某一年（按派息日）。
+
+    给了 ``year`` 时**派息日缺失的条目不计入** —— 与月度分布图同一个口径
+    （「日期未知」与「日期不在这一年」是两件事，混起来会让口径悄悄变宽）。
+    ``year=None`` 表示不筛。
+
+    **筛选只有这一处。** 导出与日历读的是同一个 ``?year=``、判的是同一件事
+    （「这一年的股息」），两处各写一遍迟早出现「图表按 2026 筛、日历按别的东西筛」——
+    而用户是拿这几个数字互相对账的。（`services.parse_year` 记着同一条理由，
+    那边管的是「参数写错回 400」。）
+    """
+    entries = dividend_entries(user)
+    if year is None:
+        return entries
+    return [e for e in entries if e.pay_date is not None and e.pay_date.year == year]
+
+
+def dividend_refs(user, entries):
+    """这份股息清单里用到的 (标的, 账户) 名字表 —— 导出与日历共用。
+
+    只取真正用到的 id：标的库是**全局**的（`AssetViewSet` 不按用户隔离），
+    全表拉进来没有必要；账户按用户隔离，**必须带 user 条件** —— 漏了那个条件就把
+    别人的账户名给出去了，而且不会有任何报错。
+    """
+    assets = {
+        a.id: (a.symbol, a.name)
+        for a in Asset.objects.filter(
+            id__in={e.asset_id for e in entries if e.asset_id is not None}
+        )
+    }
+    accounts = {
+        a.id: a.name
+        for a in Account.objects.filter(
+            user=user,
+            id__in={e.account_id for e in entries if e.account_id is not None},
+        )
+    }
+    return assets, accounts
 
 
 def build_positions(user) -> list[dict]:

@@ -61,6 +61,13 @@ class DividendEntry:
     pay_date: date | None
     origin: str  # "record" | "transaction"，仅用于排查来源
 
+    #: 这一条从哪一行来的 —— 日历要把用户点回那一条记录，就得有这个。
+    #: 两条录入路径各有一个：``record_id`` 是 ``DividendRecord.id``（纯流水录入没有），
+    #: ``transaction_id`` 是关联/来源的 ``Transaction.id``（只落明细、没关联流水时没有）。
+    #: 与明细字段同一条规矩：**没有就是 ``None``，不是 0**。
+    record_id: int | None = None
+    transaction_id: int | None = None
+
     # ---- 以下仅「有股息明细」的条目才有 ----
     gross: Decimal | None = None
     tax: Decimal | None = None
@@ -119,7 +126,7 @@ def collect_dividends(records, transactions) -> list[DividendEntry]:
 
     records / transactions 为 dict 序列，由调用方（services.py）从 ORM 摘出：
 
-    - record: ``asset_id`` / ``account_id`` / ``net`` / ``currency`` / ``pay_date`` / ``transaction_id``
+    - record: ``id`` / ``asset_id`` / ``account_id`` / ``net`` / ``currency`` / ``pay_date`` / ``transaction_id``
       ＋ 明细字段 ``gross`` / ``tax`` / ``ex_date`` / ``shares`` / ``amount_per_share`` / ``reinvested``
     - transaction: ``id`` / ``asset_id`` / ``account_id`` / ``amount`` / ``currency`` / ``traded_at``
 
@@ -142,6 +149,8 @@ def collect_dividends(records, transactions) -> list[DividendEntry]:
                 amount=_dec(row.get("net")),
                 pay_date=_as_date(row.get("pay_date")),
                 origin="record",
+                record_id=row.get("id"),
+                transaction_id=linked,
                 gross=_opt_dec(row.get("gross")),
                 tax=_opt_dec(row.get("tax")),
                 ex_date=_as_date(row.get("ex_date")),
@@ -165,6 +174,7 @@ def collect_dividends(records, transactions) -> list[DividendEntry]:
                 amount=abs(amount),
                 pay_date=_as_date(row.get("traded_at")),
                 origin="transaction",
+                transaction_id=row.get("id"),
             )
         )
 

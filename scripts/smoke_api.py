@@ -291,12 +291,98 @@ def body(base: str, report: Report) -> None:
           r.status_code == 200 and len(y_lines) - 1 == len(d_rows),
           f"{r.status_code} 行数={len(y_lines) - 1}（全部年份 {len(d_rows)}）")
 
+    # 再问一个一年都没有的年份 —— 「2026 那两笔都在」锁不住「year 被整个忽略」：
+    # 冒烟数据全在 2026，忽略筛选它照样绿。这类「不会响的检查」比没有检查更坏。
+    r = session.get(f"{base}/analytics/dividends/export/", params={"year": "2020"}, headers=headers)
+    empty_lines = [ln for ln in r.text.split("\r\n") if ln != ""]
+    check("股息导出认 year 筛选（2020 一年都没有，只剩列头）",
+          r.status_code == 200 and len(empty_lines) == 1,
+          f"{r.status_code} 行数={len(empty_lines)}")
+
     r = session.get(f"{base}/analytics/dividends/export/", params={"year": "abc"}, headers=headers)
     check("股息导出的 year 写错回 400（以前是 500）", r.status_code == 400, f"{r.status_code} {r.text[:160]}")
 
     r = session.get(f"{base}/analytics/dividends/", params={"year": "abc"}, headers=headers)
     check("同一个 year 判据也管着图表接口（解析只有一处）",
           r.status_code == 400, f"{r.status_code} {r.text[:160]}")
+    # 12. 股息日历 —— 与导出是同一件事的**另一个出口**。上一轮堵掉的是导出那个口子，
+    #     日历这个口子这一轮才堵上（改之前它直接查 DividendRecord，于是「只落流水、
+    #     没有明细」的那条录入路径在日历里一条都不出现）。所以这一段与上面那节同形状：
+    #     真的走一遍 ORM → 归集 → 分组 → 补名字，再和页面上的数字对账。
+    r = session.get(f"{base}/analytics/calendar/", headers=headers)
+    check("股息日历返回 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
+    cal = r.json() if r.status_code == 200 else {}
+    check("股息日历是三组 + 合计的形状（旧的 {results: [...]} 已换掉）",
+          all(k in cal for k in ("as_of", "upcoming", "received", "undated", "totals"))
+          and "results" not in cal,
+          json.dumps(sorted(cal), ensure_ascii=False)[:200])
+
+    cal_upcoming = cal.get("upcoming") or []
+    cal_received = cal.get("received") or []
+    cal_undated = cal.get("undated") or []
+    check("★ 只有流水的那笔股息也在日历里（照明细表写会整条漏掉）",
+          any(item.get("origin") == "transaction" for item in cal_received),
+          f"已到账 {len(cal_received)} 条，来源有：{sorted({i.get('origin') for i in cal_received})}")
+
+    # 纯流水那条没有明细可查 → 明细字段必须是 null，不能是 0 / False
+    flow_item = next((i for i in cal_received if i.get("origin") == "transaction"), {})
+    check("★ 纯流水那条：明细字段是 null，不是 0 / False",
+          flow_item.get("record_id") is None and flow_item.get("reinvested") is None
+          and flow_item.get("ex_date") is None,
+          json.dumps(flow_item, ensure_ascii=False)[:220])
+    check("纯流水那条：金额 77.25、派息日 = 流水日期、账户名由视图补上",
+          flow_item.get("amount") == "77.25" and flow_item.get("pay_date") == "2026-08-20"
+          and flow_item.get("account_name") == "冒烟账户"
+          and flow_item.get("transaction_id"),
+          json.dumps(flow_item, ensure_ascii=False)[:220])
+
+    totals = cal.get("totals") or {}
+
+    def _bucket_sum(*maps):
+        out = {}
+        for m in maps:
+            for cur, amt in (m or {}).items():
+                out[cur] = out.get(cur, Decimal("0")) + Decimal(str(amt))
+        return out
+
+    parts = _bucket_sum(totals.get("upcoming_by_currency"), totals.get("received_by_currency"),
+                        totals.get("undated_by_currency"))
+    check("★ 日历三组逐币种相加 == 合计（漏掉一整组会当场少一块）",
+          parts == {c: Decimal(str(a)) for c, a in (totals.get("by_currency") or {}).items()},
+          f"分项相加={ {c: str(v) for c, v in parts.items()} }，合计={totals.get('by_currency')}")
+    check("日历的条目数对得上（三组之和 == totals.count）",
+          len(cal_upcoming) + len(cal_received) + len(cal_undated) == totals.get("count"),
+          f"{len(cal_upcoming)}+{len(cal_received)}+{len(cal_undated)} vs count={totals.get('count')}")
+
+    # 与页面上的数字对账 —— 和导出那节同一个道理：把「日历与累计股息同口径」
+    # 从一句话变成可执行的检查。两边都按全部年份比，所以不传 year。
+    r = session.get(f"{base}/analytics/summary/", headers=headers)
+    page_total = report.field(r.json(), "dividend_total")
+    calendar_total = sum((Decimal(str(a)) for a in (totals.get("by_currency") or {}).values()),
+                         Decimal("0"))
+    check("★ 日历合计 == 总览的累计股息（同一口径，不是各算一遍）",
+          page_total is not None and Decimal(str(page_total)) == calendar_total,
+          f"页面 dividend_total={page_total!r}，日历合计={calendar_total}")
+
+    r = session.get(f"{base}/analytics/calendar/", params={"year": "2026"}, headers=headers)
+    y_cal = r.json() if r.status_code == 200 else {}
+    y_count = (y_cal.get("totals") or {}).get("count")
+    check("日历认 year 筛选（与图表/导出同一套判据）",
+          r.status_code == 200 and y_count == totals.get("count"),
+          f"{r.status_code} count={y_count}（全部年份 {totals.get('count')}）")
+    r = session.get(f"{base}/analytics/calendar/", params={"year": "2020"}, headers=headers)
+    cal_2020 = r.json() if r.status_code == 200 else {}
+    check("日历认 year 筛选（2020 一年都没有，三组全空）",
+          r.status_code == 200
+          and (cal_2020.get("totals") or {}).get("count") == 0
+          and not any(cal_2020.get(k) for k in ("upcoming", "received", "undated")),
+          f"{r.status_code} {r.text[:160]}")
+
+    r = session.get(f"{base}/analytics/calendar/", params={"year": "abc"}, headers=headers)
+    check("日历的 year 写错也回 400（解析只有一处）",
+          r.status_code == 400, f"{r.status_code} {r.text[:160]}")
+
+
 
 
 if __name__ == "__main__":

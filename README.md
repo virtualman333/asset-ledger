@@ -335,6 +335,51 @@ python -m unittest discover -s apps -t .
 
 BOM / CRLF / 公式注入防护 / 文件名给两份这几件事，两个导出**共用同一层实现**（`apps/core/csv_export.py`），行为逐字一致。有一条检查盯着「全仓只有一个渲染出口」：`render_line` / `sanitize_cell` / `quote_cell` 只许在那一个文件里定义，`BOM` / `EOL` 两个字面量也只许出现在那里，两个导出模块的同名函数必须**真的转调**它。各写一份的后果不是重复几十行，而是一个导出带 BOM、另一个不带 —— 你在同一个 Excel 里双击两个文件，一个中文正常、一个乱码。
 
+### 股息日历
+
+`GET /api/v1/analytics/calendar/` 把股息排成「哪一天收到哪笔钱」。`?year=2026` 与 `/analytics/dividends/`、股息导出**同口径**（按派息日筛；`year` 写错回 400）。
+
+数据来源同样只能是归集函数（`services.dividend_entries`）：走 `/transactions/records/` 且 `side=DIVIDEND` 的那条录入路径**只落一条流水、没有明细**，照「把明细表列出来」写，这些股息在日历里**一条都不出现** —— 而同一个页面上的「累计股息」是把它算进去的。上一轮堵掉的是导出那个口子，日历这个口子这一轮才堵上。现在三个出口（图表 / 导出 / 日历）走的是同一个归集函数，并且有一组**读源码**的检查盯着这件事：`DividendRecord` 只许出现在 `services.py` 的两个摘数据函数里，视图层与纯计算层碰它就红（`apps/analytics/tests/test_dividend_exits.py`）；冒烟脚本每次还会真的起一遍服务端，验「只落流水的那笔在日历里」与「日历合计 == 总览的累计股息」。
+
+返回三组 + 合计，一条都不许丢：
+
+| 组 | 判据 | 排序 |
+| --- | --- | --- |
+| `upcoming` | 派息日在今天**之后** —— DESIGN §4.5 说的「派息日提醒」就是它 | 日期升序（最近的一笔在最前） |
+| `received` | 派息日在今天**当天或之前**（今天派的算已到账） | 倒序（刚收到的在最前） |
+| `undated` | **派息日为空**的条目 | 按标的、账户、日期 |
+
+派息日未知的那些既不属于待派也不属于已到账，**但必须报出来** —— 悄悄丢掉等于告诉你这笔股息不存在。分组的边界就两条（`pay_date == 今天` 算已到账、`明天` 才进待派），「今天」是**参数**不是模块里读的时钟：读时钟的话这几条边界根本没法断言。
+
+`totals`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `count` | 条目总数（等于三组条数之和） |
+| `by_currency` | 全部条目的分币种合计 |
+| `upcoming_by_currency` / `received_by_currency` / `undated_by_currency` | 三个分项各自的分币种合计 |
+| `upcoming_count` | 待派的笔数 |
+| `next_pay_date` | 下一次派息日；没有待派时是 `null`（不拿「日期未知」的来凑） |
+
+**三个分项逐币种相加等于 `by_currency`**：少一整组时账面上会缺一块，而缺的那块最容易是「日期未知」那组。分币种而不是加总 —— CNY 与 USD 加在一起是个没有意义的数；折算过的那个合计在 `summary.dividend_total` 里，日历的 `by_currency` 加总与它相等。
+
+每条的样子：
+
+| 字段 | 含义 |
+| --- | --- |
+| `asset_id` / `account_id` | 外键 id |
+| `symbol` / `asset_name` / `account_name` | 名字由视图补；查不到时空串（不是缺字段） |
+| `currency` / `amount` | 币种与**到手**金额（有明细取 `net`，纯流水取流水金额的绝对值 —— 与「累计股息」同一个数） |
+| `pay_date` / `ex_date` | 日期；没有明细的条目 `ex_date` 是 `null` |
+| `days_until` | 距派息日还有几天：未到是正数、当天 `0`、已过是负数；日期未知 `null` |
+| `origin` | `record`（股息明细）或 `transaction`（流水录入） |
+| `reinvested` / `record_id` | 明细字段；纯流水录入的是 `null`，**不是 `0` / `false`** |
+| `transaction_id` | 关联的那条流水 id |
+
+金额一律经 `apps/core/csv_export.fmt_decimal` —— **与导出 CSV 同一个函数**。库里是 `DECIMAL(24,8)`，流水录入的股息取出来是 `77.25000000`，直接 `str()` 写进 JSON 就是这个样子，而同一个数在导出文件里是 `77.25`：同一笔股息在两个出口里读起来是两个数，只会让人以为其中一个错了。（这条是冒烟脚本跑出来的：导出那条断言过、日历那条红。）
+
+这一版换掉了旧的 `{"results": [...]}` 形状：那形状里的 `id` 是 `DividendRecord` 的主键，而纯流水录入的股息**没有**这个 id，留着它等于继续暗示「日历里的东西都是明细」。两个客户端目前都还没消费这个接口（`harmony/` 里没有 calendar 的调用）。
+
 演示账号：`demo / demo12345`
 
 客户端：用 DevEco Studio 打开 `harmony/`，跑起来后在登录页填后端地址：
@@ -363,7 +408,8 @@ POST /api/v1/ingest/image|text                     凭证上传与识别
 GET  /api/v1/ingest/jobs/{id}/                     单条识别任务的结果（收件箱轮询）
 GET  /api/v1/ingest/drafts/                        草稿箱
 POST /api/v1/ingest/drafts/{id}/confirm|discard    确认入账 / 丢弃
-GET  /api/v1/analytics/positions|summary|dividends|calendar
+GET  /api/v1/analytics/positions|summary|dividends
+GET  /api/v1/analytics/calendar/                   股息日历（三组 + 合计，支持 ?year=）
 GET  /api/v1/analytics/dividends/export/           股息导出 CSV（与「累计股息」同口径，支持 ?year=）
 ```
 
@@ -398,7 +444,7 @@ GET  /api/v1/analytics/dividends/export/           股息导出 CSV（与「累�
 - [x] M0 骨架：MySQL 建库、后端骨架、鸿蒙工程、GitHub 仓库
 - [x] M1 手动记账闭环：账户 / 标的 / 流水 CRUD + 幂等
 - [x] M2 行情与收益：多源抓价、持仓、浮盈、XIRR 多币种折算
-- [x] M3 股息模块：股息记录、月度聚合、日历
+- [x] M3 股息模块：股息记录、月度聚合、日历（日历是从**已录入的股息**排出来的，见「股息日历」）
 - [x] M4 Agent 链路：文本与截图识别 → 草稿箱 → 确认入账
 - [ ] M5 打磨：截图上传端上接入、图表、导出 CSV（**流水与股息都已支持**）、通知、真机签名
 
@@ -415,7 +461,7 @@ GET  /api/v1/analytics/dividends/export/           股息导出 CSV（与「累�
 - **多 worker 部署**（`gunicorn -w 4`）时只有抢到文件锁的那一个 worker 会真的抓行情，
   其余进程只跑 Web 请求 —— 这是刻意的，否则每轮会被放大成 N 遍。
   多机部署时每台机器各有一个调度器（锁是**本机**的，别放到网络盘上）
-- 股息数据以手动录入与 Agent 识别为主，自动股息日历仍在 TODO
+- 股息数据以手动录入与 Agent 识别为主。日历（`analytics/calendar/`）拼的是**已录入的股息**，「抓公告自动生成未来的派息日」仍在 TODO
 - 客户端默认后端地址（`10.0.2.2:8000`）在 `ApiClient.ets` 与 `EntryAbility.ets` 里**各写了
   一遍**；本机没有 DevEco / hvigor 工具链，编译不出来，所以先由
   `test_api_surface_contract.py` 钉住「两份一致、且与上面那句 README 一致」。真要收敛就
