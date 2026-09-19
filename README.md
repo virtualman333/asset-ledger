@@ -206,6 +206,30 @@ python scripts/smoke_record_flow.py --base http://127.0.0.1:8000
 `apps/core/tests/test_source_stamp.py` 钉住，连同「`scripts/` 里的脚本」与「本节点名的脚本」
 的双向一致（新脚本忘了写文档、或文档点着不存在的脚本，都会红）。
 
+### 路由清单与 Django 的对账（`scripts/check_routes.py`）
+
+`apps/core/route_inventory.py` 是两份契约的共同真值 —— 下面那份「主要接口」清单、
+客户端 `.ets` 里打出去的每个路径，都拿它做对账。可它自己是个**手写的 AST 解析器**
+（只读 `urls.py` 里的字面量，不 import Django），从来没有任何东西核对过它认出来的路由
+与 Django 实际认识的是不是同一批。两个方向都是静默的：**幻影路由**会让契约为一条 404
+放行（客户端照着写，页面永远转圈），**漏认**会把真实存在的路径判成非法。
+
+```bash
+python scripts/check_routes.py          # 用 Django 本体核对（要装 requirements.txt 的解释器）
+python scripts/check_routes.py --diff   # 顺带把两侧差异逐条打出来
+```
+
+它把 `get_resolver().url_patterns` 递归展开，与 `real_routes()` 做**两向**比对；
+**每条差异都必须落在脚本里的登记表里并写明理由**，没登记的就是失败（退出码 1）。
+实测：`api/v1/` 下 Django 认得 **29** 条，清单 **28** 条，唯一那条差异是 DefaultRouter 的
+API 根视图 `api/v1/transactions/`（不是注册出来的资源），已登记；**幻影路由 0 条**。
+DRF 那 11 条 `format` 后缀变体整族排除，条数用棘轮钉住 —— DRF 改了生成形状就会红。
+
+它**必须**是脚本而不是单测：本仓单测有一条硬承诺「不需要数据库、不需要 Django」，
+而 `apps/core/tests/test_no_django_required.py` 把「需要 Django 的模块数」钉死在
+`skipped=1`（唯一获准的例外是 `apps/market/tests/test_scheduler_autostart.py`）。
+所以它和冒烟脚本同属「要有真环境才跑得动」的那一层。
+
 ### 服务端自证（`/api/v1/health/`）
 
 `GET /api/v1/health/`（**不需要认证**）报出服务端自己那份源码的内容指纹、它的启动时刻，
