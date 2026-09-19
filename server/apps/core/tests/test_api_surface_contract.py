@@ -299,7 +299,8 @@ class TestDocumentedMethodsMatchTheRoutes(unittest.TestCase):
             problems, [],
             "README 的动词列与服务端真值对不上：\n  " + "\n  ".join(problems) +
             "\n改 README 的动词列（`route_inventory.route_methods()` 才是真值）——"
-            "如果改的是服务端，记得顺手跑 `python scripts/check_routes.py`，"
+            "如果改的是服务端，跑一遍 `python scripts/run_checks.py`"
+            "（它会把 `scripts/check_routes.py` 送给 Django 本体核一遍），"
             "让 Django 本体核一下推出来的方法集还对不对。",
         )
 

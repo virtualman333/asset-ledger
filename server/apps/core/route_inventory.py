@@ -250,7 +250,7 @@ VIEWSET_DECLARED_ACTIONS = {
 #: 认不出来的基类名该往哪张表里补
 _BASE_TABLE_HINT = (
     "把它的方法补进 `VIEW_BASE_METHODS` / `VIEWSET_BASE_ACTIONS`"
-    "（顺便在 `scripts/check_routes.py` 里跑一遍，让 Django 本体核一下补得对不对）"
+    "（顺便跑一遍 `scripts/run_checks.py`：它会把这件事交给 Django 本体核一下补得对不对）"
 )
 
 

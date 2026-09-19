@@ -111,7 +111,7 @@ python manage.py refresh_quotes
 harmony/   鸿蒙工程（DevEco Studio 打开这一层）
 server/    Django 后端
 docs/      方案设计与接口文档
-scripts/   冒烟测试等工具脚本
+scripts/   工具脚本（入口：`scripts/run_checks.py`）
 ```
 
 ## 客户端页面
@@ -216,6 +216,40 @@ python scripts/smoke_record_flow.py --base http://127.0.0.1:8000
 `apps/core/tests/test_smoke_lib.py` 钉住（含指纹核对五种结局各走一遍），指纹本身的口径由
 `apps/core/tests/test_source_stamp.py` 钉住，连同「`scripts/` 里的脚本」与「本节点名的脚本」
 的双向一致（新脚本忘了写文档、或文档点着不存在的脚本，都会红）。
+
+### 工具脚本的唯一入口（`scripts/run_checks.py`）
+
+`scripts/` 下的脚本分两拨：跑得动的（`check_routes.py`，只要一个装了 `requirements.txt`
+的解释器）和跑不动的（`smoke_api.py` / `smoke_record_flow.py`，要一个真的在跑、而且库可写的
+服务）。它们住不进 `apps/*/tests/` —— 本仓单测有一条硬承诺「不需要数据库、不需要 Django」，
+`test_no_django_required.py` 把「需要 Django 的测试模块数」钉在 `skipped=1`。
+
+于是它们此前唯一的打开方式是**文档里那句「记得顺手跑」**。而「记得」不是检查：
+
+- `check_routes.py` 里的**棘轮**（`FORMAT_VARIANT_COUNT`）与登记表，用处正是「变了就逼人
+  回来看一眼」—— **一个没人跑的棘轮不是棘轮**，它连「没响过」都说不出来；
+- 这篇文档里那句「实测 `api/v1/` 下 Django 认得 29 条、清单 28 条、方法 28 条共有路径
+  0 分歧」是**某一次**手跑的结果，之后谁也没复核过。
+
+现在唯一入口是 `scripts/run_checks.py`：
+
+```bash
+python scripts/run_checks.py            # 跑得动的都跑，跑不动的说明原因
+python scripts/run_checks.py --strict   # 跳过也算失败 —— 发版前用
+python scripts/run_checks.py --live     # 连冒烟脚本一起跑（要先起服务 + 可写数据库）
+```
+
+它只做两件事：**按每个脚本需要的环境决定跑还是跳过，并把结果折成一个退出码。**
+三条性质由 `apps/core/tests/test_checks_runner_contract.py` 钉着，每一条都对应入口的一种
+静默失败方式：
+
+1. **两向对账**：`scripts/` 下每个对外脚本都必须在它的 `CHECKS` 里露面，`CHECKS` 点名的
+   必须真的存在。新加一个脚本忘了接进来 → 红（而不是安静地没人跑）。这条与
+   `test_smoke_lib.py` 里「脚本 ⇄ 这个文档」那条是同一形状，但读的是**另一个消费方** ——
+   有文档不等于有人跑。
+2. **退出码真的折叠**：拿几个**合成假脚本**（exit 0 / exit 1）真跑一遍入口，验「子脚本非 0
+   → 入口非 0」。这是这一层的命门：一个「跑完打印 OK 就 exit 0」的调度器**比没有调度器更坏**。
+3. **跳过必须出声**：环境不满足时点名说明、并明说「这不是通过」；`--strict` 下跳过算失败。
 
 ### 路由清单与 Django 的对账（`scripts/check_routes.py`）
 

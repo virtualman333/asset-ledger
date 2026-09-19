@@ -197,7 +197,7 @@ class TestClientCallsOnlyRealRoutes(unittest.TestCase):
             "客户端用了路由接不了的动词（真机上 405，界面只会显示「加载失败」）：\n  "
             + "\n  ".join(problems) +
             "\n要么改客户端的动词，要么改服务端视图 —— 改完服务端记得跑 "
-            "`python scripts/check_routes.py`，让 Django 本体核一遍推出来的方法集。",
+            "`python scripts/run_checks.py`，让 Django 本体核一遍推出来的方法集。",
         )
 
     def test_every_client_path_exists_on_the_server(self):
