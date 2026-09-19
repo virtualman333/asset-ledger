@@ -19,6 +19,19 @@
 **每条差异都必须落在下面那两张登记表里并写明理由**，没登记的就是失败 ——
 不是「打一批 warning 然后退出码 0」。
 
+第二件事：**方法**
+------------------
+同一轮里 `route_inventory` 还学会了推「这条路由接哪些动词」（`route_methods()`）。
+它推得对不对，也只有 Django 本体说了算 —— `urls.py` 里没有动词，动词长在视图对象上：
+
+  - router 生成的路由：`callback.actions` 就是 DRF 塞进去的「方法 → 动作名」那张映射；
+  - `.as_view()` 出来的类视图：`callback.cls` 是那个类，看它有没有 `get` / `post`…；
+  - 裸函数视图：Django 不限制方法，五个业务动词全接。
+
+只比五个业务动词（`get` / `post` / `put` / `patch` / `delete`）：`head` / `options` / `trace`
+是框架无条件回的，算进来只会让每条路由都「支持」它们。差集同样要登记理由 ——
+下面那张 `METHOD_DIFF_OK` 现在**是空的**，实测 0 分歧；它是留给「知道为什么不同」的情况的。
+
 为什么是脚本而不是单测
 ----------------------
 本仓的测试有一条硬承诺：「单元测试不需要数据库、不需要 Django」，而且
@@ -92,8 +105,13 @@ FORMAT_VARIANT_COUNT = 11
 
 
 # --------------------------------------------------------------------------- 两侧枚举
-def django_routes():
-    """Django 运行时真正认的那批路由（递归展开 URLResolver）。"""
+def django_patterns():
+    """Django 运行时真正认的那批路由 → `[(整条 pattern, 那个 pattern 对象)]`。
+
+    返回 pattern 对象（不只是字符串）是因为**方法**只能从它身上读：`getattr(p, "callback")`
+    才是真正的视图，URL 字符串里没有动词。第一版这个函数只 yield 字符串，于是「方法」
+    这一面就永远只能靠「路径是对的」来间接担保 —— 那正是它上线前没人核的原因。
+    """
     from django.urls import get_resolver
 
     def walk(patterns, prefix=""):
@@ -102,9 +120,54 @@ def django_routes():
             if sub is not None:
                 yield from walk(sub, prefix + str(p.pattern))
             else:
-                yield prefix + str(p.pattern)
+                yield prefix + str(p.pattern), p
 
-    return sorted(set(walk(get_resolver().url_patterns)))
+    return list(walk(get_resolver().url_patterns))
+
+
+def django_routes():
+    """只要路由字符串（路径那一面用）。"""
+    return sorted({raw for raw, _p in django_patterns()})
+
+
+#: 只比这五个业务动词：`head` / `options` / `trace` 是 Django 与 DRF 无条件回框架行为，
+#: 与视图写没写无关（`View` 里带 `options`、DRF 的 `APIView.dispatch` 会兜底），
+#: 算进来只会让每条路由都「支持」它们，把这张表的信号淹没。
+BUSINESS_METHODS = ("get", "post", "put", "patch", "delete")
+
+
+def django_route_methods(patterns):
+    """`{归一化路径: frozenset(方法)}` —— 直接问 Django 本体的视图对象。
+
+    三条分支对应三种视图：
+    1. **router 生成的**：DRF 在 `ViewSetMixin.as_view()` 里把 `actions` 塞给视图函数，
+       它的**键**就是允许的方法（`{'get': 'list', 'post': 'create'}`）——
+       这里第一版写成了 `actions.values()`，拿到的是动作名（`list`/`create`），
+       与业务动词求交集当然永远是空集，于是每条 router 路由都「一个方法都不接」。
+    2. **`.as_view()` 的类视图**：`callback.cls` 是那个类（DRF 与 Django 的 `as_view`
+       都会挂上，DRF 用 `cls`、Django 用 `view_class`，两个都看一遍），
+       看它有没有 `get` / `post`…；
+    3. **裸函数视图**：`health` 那种 —— Django 不限制方法，五个业务动词全接。
+       （给它报 `{get}` 才是猜；README 写 `GET /health/` 是说「你就这么用」。）
+    """
+    out = {}
+    for raw, p in patterns:
+        if is_format_variant(raw):
+            continue
+        key = canonical(raw)
+        if not key.startswith(API_PREFIX):
+            continue
+        callback = p.callback
+        actions = getattr(callback, "actions", None)
+        cls = getattr(callback, "cls", None) or getattr(callback, "view_class", None)
+        if actions is not None:
+            methods = {m for m in actions if m in BUSINESS_METHODS}
+        elif cls is not None:
+            methods = {m for m in BUSINESS_METHODS if hasattr(cls, m)}
+        else:
+            methods = set(BUSINESS_METHODS)
+        out.setdefault(key, set()).update(methods)
+    return {key: frozenset(value) for key, value in out.items()}
 
 
 def inventory_routes():
@@ -112,7 +175,7 @@ def inventory_routes():
     from apps.core import route_inventory
 
     explicit, collections, details = route_inventory.real_routes()
-    return explicit, collections, details, route_inventory.all_routes()
+    return explicit, collections, details, route_inventory.all_routes(), route_inventory.route_methods()
 
 
 # --------------------------------------------------------------------------- 登记表
@@ -126,6 +189,15 @@ DJANGO_ONLY_OK = {
 #: 清单有、Django 没有 —— 这条表最好永远是空的：幻影路由是最危险的一类差异。
 INVENTORY_ONLY_OK = {}
 
+#: 方法不一致、但**说得清为什么**的路径 → 理由。
+#: 空表是有意的：实测两边 0 分歧。用它是「知道为什么不同」，不是「先记下来让它过去」——
+#: 登记表自己也会腐烂（登记的路径哪天变一致了，下面会红）。
+METHOD_DIFF_OK = {}
+
+#: 方法这一面至少要真的比到这么多条路径，否则说明某一侧塌了。
+#: 「两边都空 → 集合相等 → 全绿」是这类对账最经典的恒真形态。
+METHOD_COMPARE_FLOOR = 20
+
 
 # --------------------------------------------------------------------------- 主流程
 def main(argv=None):
@@ -138,8 +210,9 @@ def main(argv=None):
         import django
 
         django.setup()
-        raw = django_routes()
-        explicit, collections, details, inventory = inventory_routes()
+        patterns = django_patterns()
+        raw = sorted({route for route, _p in patterns})
+        explicit, collections, details, inventory, inventory_methods = inventory_routes()
     except Exception:
         # 「跑一遍给结论」的工具必须把异常折算成一条 FAIL：崩掉的结论也是结论
         print("[FAIL] 没能跑起来：\n" + traceback.format_exc())
@@ -151,9 +224,9 @@ def main(argv=None):
     django_side = {canonical(r) for r in plain}
     inventory_side = {canonical(r) for r in inventory}
 
-    print(f"[1/4] Django 本体枚举：{len(raw)} 条（其中 api/v1/ 下 {len(api_raw)} 条）")
-    print(f"[2/4] 其中 format 后缀变体 {len(variants)} 条（按家族排除，棘轮登记 {FORMAT_VARIANT_COUNT} 条）")
-    print(f"[3/4] 路由清单：显式 {len(explicit)} / 集合 {len(collections)} / 明细 {len(details)} "
+    print(f"[1/6] Django 本体枚举：{len(raw)} 条（其中 api/v1/ 下 {len(api_raw)} 条）")
+    print(f"[2/6] 其中 format 后缀变体 {len(variants)} 条（按家族排除，棘轮登记 {FORMAT_VARIANT_COUNT} 条）")
+    print(f"[3/6] 路由清单：显式 {len(explicit)} / 集合 {len(collections)} / 明细 {len(details)} "
           f"→ 并集 {len(inventory_side)} 条")
 
     # 解析面不许为空 —— 两边都空会让「集合相等」恒真
@@ -173,7 +246,7 @@ def main(argv=None):
     unregistered_missing = [r for r in only_django if r not in DJANGO_ONLY_OK]
     unregistered_extra = [r for r in only_inventory if r not in INVENTORY_ONLY_OK]
 
-    print(f"[4/4] 两向对账：Django 独有 {len(only_django)} 条 / 清单独有 {len(only_inventory)} 条")
+    print(f"[4/6] 路径两向对账：Django 独有 {len(only_django)} 条 / 清单独有 {len(only_inventory)} 条")
     if args.diff or unregistered_missing or unregistered_extra:
         for r in only_django:
             print(f"      Django 独有: {r}   {DJANGO_ONLY_OK.get(r, '← 未登记！')}")
@@ -191,7 +264,52 @@ def main(argv=None):
             + "\n  ".join(unregistered_extra)
         )
 
-    # 登记表本身也会腐烂：登记成「Django 独有」的必须真的 Django 独有
+    # ----------------------------------------------------------------- 方法
+    django_methods = django_route_methods(patterns)
+    # 只比两侧都认的路径：路径本身的差异上面已经管了，混进来会得到重复的报错
+    shared = sorted(django_side & inventory_side)
+    method_diffs = []
+    for path in shared:
+        want = inventory_methods.get(path)
+        if want is None:
+            problems.append(
+                f"{path} 两侧都认这条路，可 `route_methods()` 里没有它 —— "
+                "方法表与路径表的键漂了（`route_inventory` 那边有一条单测钉同一件事）"
+            )
+            continue
+        got = django_methods.get(path, frozenset())
+        if set(got) != set(want):
+            method_diffs.append((path, got, want))
+
+    print(f"[5/6] 方法两向对账：比了 {len(shared)} 条路径，不一致 {len(method_diffs)} 条"
+          f"（登记 {len(METHOD_DIFF_OK)} 条）")
+    if args.diff or method_diffs:
+        for path, got, want in method_diffs:
+            print(f"      {path}: Django={','.join(sorted(got)) or '（无）'}"
+                  f"  清单={','.join(sorted(want)) or '（无）'}"
+                  f"   {METHOD_DIFF_OK.get(path, '← 未登记！')}")
+
+    if len(shared) < METHOD_COMPARE_FLOOR:
+        problems.append(
+            f"方法只比到 {len(shared)} 条路径（下限 {METHOD_COMPARE_FLOOR}）—— 比对面塌了，"
+            "「两边都空所以相等」正是这类对账最经典的恒真形态"
+        )
+    for path, got, want in method_diffs:
+        if path not in METHOD_DIFF_OK:
+            problems.append(
+                f"{path} 的方法不一致：Django 认 {'/'.join(sorted(got)) or '（无）'}，"
+                f"清单推出来的是 {'/'.join(sorted(want)) or '（无）'} —— "
+                "契约会照着清单那一侧放行，客户端于是撞 405。要保留差异就在 "
+                "METHOD_DIFF_OK 里登记理由"
+            )
+    for path in METHOD_DIFF_OK:
+        if path not in shared:
+            problems.append(f"METHOD_DIFF_OK 里登记的 {path} 两边压根没在比 —— 登记表在腐烂")
+        elif not any(path == d[0] for d in method_diffs):
+            problems.append(f"METHOD_DIFF_OK 里登记的 {path} 其实两边一致了，该删掉这条登记")
+
+    # ----------------------------------------------------------------- 登记表腐烂
+    print("[6/6] 登记表自检")
     for r in DJANGO_ONLY_OK:
         if r not in django_side:
             problems.append(f"DJANGO_ONLY_OK 里登记的 {r} 在 Django 侧已经不存在了，登记表在腐烂")
@@ -209,7 +327,8 @@ def main(argv=None):
         return 1
 
     print(f"[OK] 路由清单与 Django 本体一致：api/v1/ 下 {len(django_side)} 条，"
-          f"另 {len(only_django)} 条差异全部有登记。")
+          f"另 {len(only_django)} 条差异全部有登记；"
+          f"方法在 {len(shared)} 条共有路径上**逐条一致**（0 分歧）。")
     return 0
 
 
