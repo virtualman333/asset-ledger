@@ -32,6 +32,13 @@
 是框架无条件回的，算进来只会让每条路由都「支持」它们。差集同样要登记理由 ——
 下面那张 `METHOD_DIFF_OK` 现在**是空的**，实测 0 分歧；它是留给「知道为什么不同」的情况的。
 
+第三件事：**README 里手抄的那几个条数**
+------------------------------------------
+`[7/7]` 用本轮实测值核对 README 那节里的「Django 认得 N 条 / 清单 M 条 / N 条共有路径 /
+format 变体 K 条」。它是有理由的：这些数是**某一次**手跑的结果，每加一条路由都会过期，
+而此前**没有任何东西会响**（本轮实测新增一条导出路由后，README 里 4 处数字全错、
+其余检查全绿）。正则失配也算失败 —— 「那句话找不到了」不等于「没什么可比」。
+
 为什么是脚本而不是单测
 ----------------------
 本仓的测试有一条硬承诺：「单元测试不需要数据库、不需要 Django」，而且
@@ -224,9 +231,9 @@ def main(argv=None):
     django_side = {canonical(r) for r in plain}
     inventory_side = {canonical(r) for r in inventory}
 
-    print(f"[1/6] Django 本体枚举：{len(raw)} 条（其中 api/v1/ 下 {len(api_raw)} 条）")
-    print(f"[2/6] 其中 format 后缀变体 {len(variants)} 条（按家族排除，棘轮登记 {FORMAT_VARIANT_COUNT} 条）")
-    print(f"[3/6] 路由清单：显式 {len(explicit)} / 集合 {len(collections)} / 明细 {len(details)} "
+    print(f"[1/7] Django 本体枚举：{len(raw)} 条（其中 api/v1/ 下 {len(api_raw)} 条）")
+    print(f"[2/7] 其中 format 后缀变体 {len(variants)} 条（按家族排除，棘轮登记 {FORMAT_VARIANT_COUNT} 条）")
+    print(f"[3/7] 路由清单：显式 {len(explicit)} / 集合 {len(collections)} / 明细 {len(details)} "
           f"→ 并集 {len(inventory_side)} 条")
 
     # 解析面不许为空 —— 两边都空会让「集合相等」恒真
@@ -246,7 +253,7 @@ def main(argv=None):
     unregistered_missing = [r for r in only_django if r not in DJANGO_ONLY_OK]
     unregistered_extra = [r for r in only_inventory if r not in INVENTORY_ONLY_OK]
 
-    print(f"[4/6] 路径两向对账：Django 独有 {len(only_django)} 条 / 清单独有 {len(only_inventory)} 条")
+    print(f"[4/7] 路径两向对账：Django 独有 {len(only_django)} 条 / 清单独有 {len(only_inventory)} 条")
     if args.diff or unregistered_missing or unregistered_extra:
         for r in only_django:
             print(f"      Django 独有: {r}   {DJANGO_ONLY_OK.get(r, '← 未登记！')}")
@@ -281,7 +288,7 @@ def main(argv=None):
         if set(got) != set(want):
             method_diffs.append((path, got, want))
 
-    print(f"[5/6] 方法两向对账：比了 {len(shared)} 条路径，不一致 {len(method_diffs)} 条"
+    print(f"[5/7] 方法两向对账：比了 {len(shared)} 条路径，不一致 {len(method_diffs)} 条"
           f"（登记 {len(METHOD_DIFF_OK)} 条）")
     if args.diff or method_diffs:
         for path, got, want in method_diffs:
@@ -309,7 +316,7 @@ def main(argv=None):
             problems.append(f"METHOD_DIFF_OK 里登记的 {path} 其实两边一致了，该删掉这条登记")
 
     # ----------------------------------------------------------------- 登记表腐烂
-    print("[6/6] 登记表自检")
+    print("[6/7] 登记表自检")
     for r in DJANGO_ONLY_OK:
         if r not in django_side:
             problems.append(f"DJANGO_ONLY_OK 里登记的 {r} 在 Django 侧已经不存在了，登记表在腐烂")
@@ -318,6 +325,26 @@ def main(argv=None):
     for r in INVENTORY_ONLY_OK:
         if r in django_side:
             problems.append(f"INVENTORY_ONLY_OK 里登记的 {r} 其实 Django 也认，登记表在腐烂")
+
+    # ------------------------------------------------------- README 手抄的条数
+    # 加一条路由就会让 README「路由清单与 Django 的对账」那节里的三个数字全部过期，
+    # 而**没有任何东西会响**（本轮实测：新增一条导出路由之后，README 那三处 + 客户端契约
+    # 那节的同一句话共 4 处全错，全套检查照样绿）。这里把它们按本轮实测值核一遍。
+    print("[7/7] README 里手抄的路由条数")
+    from apps.core import route_inventory
+
+    readme_problems = route_inventory.readme_count_problems(
+        (ROOT / "README.md").read_text(encoding="utf-8"),
+        {
+            "django": len(django_side),
+            "inventory": len(inventory_side),
+            "common": len(shared),
+            "format": len(variants),
+        },
+    )
+    for p in readme_problems:
+        print("      ✗ " + p)
+    problems.extend(readme_problems)
 
     print()
     if problems:

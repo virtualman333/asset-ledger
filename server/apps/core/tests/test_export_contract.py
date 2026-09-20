@@ -9,7 +9,8 @@
 都红），并且要求解析面不许为空（否则「两边都空」会让「相等」恒真）。
 
 同理，README 的「导出股息明细（CSV）」表对 `apps/analytics/dividend_export.py` 的
-`DIVIDEND_CSV_COLUMNS`。两份列清单走同一套解析与同一条判据 —— 不为了第二份抄一遍检查。
+`DIVIDEND_CSV_COLUMNS`、「导出持仓（CSV）」表对 `apps/analytics/positions_export.py` 的
+`POSITIONS_CSV_COLUMNS`。三份列清单走同一套解析与同一条判据 —— 不为第二份抄一遍检查。
 
 二、`records/export/` 必须排在 `router.urls` 前面
 --------------------------------------------------
@@ -20,8 +21,8 @@ DRF 给 ViewSet 生成的明细路由是 `records/(?P<pk>[^/.]+)/`，`export` �
 
 三、★ 全仓只有一个 CSV 渲染出口
 --------------------------------
-两份导出（流水、股息）的列清单不同，面对的外部世界却是同一个：BOM、CRLF、公式注入、
-RFC 4180 转义、latin-1 响应头。各写一份的后果**不是重复几十行，而是分头漂** ——
+三份导出（流水、股息、持仓）的列清单不同，面对的外部世界却是同一个：BOM、CRLF、
+公式注入、RFC 4180 转义、latin-1 响应头。各写一份的后果**不是重复几十行，而是分头漂** ——
 而漂了不报错：一个导出带 BOM、另一个不带，用户在同一个 Excel 里双击两个文件，
 一个中文正常、一个乱码。
 
@@ -59,9 +60,10 @@ ROOT = SERVER.parent
 README = ROOT / "README.md"
 TRANSACTIONS_URLS = SERVER / "apps" / "transactions" / "urls.py"
 
-#: README 里那两节的标题（正文到下一个标题为止）
+#: README 里那几节的标题（正文到下一个标题为止）
 EXPORT_SECTION_TITLE = "导出流水（CSV）"
 DIVIDEND_SECTION_TITLE = "导出股息明细（CSV）"
+POSITIONS_SECTION_TITLE = "导出持仓（CSV）"
 
 
 def section_re(title):
@@ -86,10 +88,12 @@ EXPORT_ROUTE = "records/export/"
 #: 列数下限：低于这个数说明要么 README 被削了、要么解析器塌了
 MIN_COLUMNS = 10
 MIN_DIVIDEND_COLUMNS = 10
+MIN_POSITIONS_COLUMNS = 10
 
-# 只 import 纯模块：这两个都不 import django，所以这份检查能待在「不需要数据库、
+# 只 import 纯模块：这三个都不 import django，所以这份检查能待在「不需要数据库、
 # 不需要 Django」的那一侧（`test_no_django_required.py` 会拦掉 Django 再把整套跑一遍）。
 from apps.analytics.dividend_export import DIVIDEND_CSV_COLUMNS  # noqa: E402
+from apps.analytics.positions_export import POSITIONS_CSV_COLUMNS  # noqa: E402
 from apps.transactions.export_rules import CSV_COLUMNS  # noqa: E402
 
 
@@ -142,6 +146,11 @@ def documented_dividend_columns(text=None):
     return documented_columns(DIVIDEND_SECTION_TITLE, text)
 
 
+def documented_positions_columns(text=None):
+    """README「导出持仓（CSV）」那一节解出的列。"""
+    return documented_columns(POSITIONS_SECTION_TITLE, text)
+
+
 def declared_columns():
     """真值：`CSV_COLUMNS` 的表头，按列序。"""
     return [title for _, title in CSV_COLUMNS]
@@ -150,6 +159,11 @@ def declared_columns():
 def declared_dividend_columns():
     """真值：`DIVIDEND_CSV_COLUMNS` 的表头，按列序。"""
     return [title for _, title in DIVIDEND_CSV_COLUMNS]
+
+
+def declared_positions_columns():
+    """真值：`POSITIONS_CSV_COLUMNS` 的表头，按列序。"""
+    return [title for _, title in POSITIONS_CSV_COLUMNS]
 
 
 def _call_name(node):
@@ -300,6 +314,48 @@ class TestReadmeDividendColumnListMatchesTheCode(unittest.TestCase):
         self.assertNotEqual(flow, dividend, "两节解出了同一张表 —— 按标题切片没起作用")
         self.assertIn("除权日", dividend, "股息那一节里没有「除权日」—— 取到的不是那一节")
         self.assertNotIn("除权日", flow, "流水那一节里冒出了「除权日」—— 两节串了")
+
+
+class TestReadmePositionsColumnListMatchesTheCode(unittest.TestCase):
+    """持仓那份列清单走**同一套判据** —— 不为第三份抄一遍检查。"""
+
+    def test_documented_columns_are_the_code_ones(self):
+        documented = documented_positions_columns()
+        expected = declared_positions_columns()
+        self.assertEqual(
+            documented,
+            expected,
+            "README 的「导出持仓（CSV）」表与 `positions_export.POSITIONS_CSV_COLUMNS` 对不上：\n"
+            f"  README: {documented}\n  代码:   {expected}\n"
+            "改列就得改那张表，反之亦然 —— 手抄的清单漏一列是安静的。",
+        )
+
+    def test_the_section_is_intact(self):
+        """解析面自证：真的解出了一张表，而不是「啥都没解出来所以相等」。"""
+        documented = documented_positions_columns()
+        self.assertGreaterEqual(
+            len(documented), MIN_POSITIONS_COLUMNS,
+            f"只解出 {len(documented)} 列 —— 表被削了，或者解析器塌了",
+        )
+        self.assertEqual(
+            len(set(documented)), len(documented), f"文档表里出现了重复的列名：{documented}"
+        )
+
+    def test_it_is_really_a_third_table(self):
+        """★ 三张表必须两两不同 —— 否则按标题切片没起作用，上面那条相等断言在管别人。"""
+        flow = documented_export_columns()
+        dividend = documented_dividend_columns()
+        positions = documented_positions_columns()
+        self.assertNotIn(positions, (flow, dividend), "持仓那一节解出了别的节的那张表")
+        self.assertIn("持仓成本", positions, "持仓那一节里没有「持仓成本」—— 取到的不是那一节")
+        self.assertNotIn("持仓成本", flow, "流水那一节里冒出了「持仓成本」—— 两节串了")
+        self.assertNotIn("持仓成本", dividend, "股息那一节里冒出了「持仓成本」—— 两节串了")
+
+    def test_a_missing_positions_section_raises(self):
+        """反面对照：这一节没了要**抛异常**，不是返回空列表让相等断言恒真。"""
+        with self.assertRaises(AssertionError) as ctx:
+            documented_positions_columns("# 标题\n\n没有那一节\n")
+        self.assertIn(POSITIONS_SECTION_TITLE, str(ctx.exception))
 
 
 class TestTheExportRouteIsReachable(unittest.TestCase):
@@ -482,7 +538,7 @@ class TestThereIsOnlyOneCsvRenderer(unittest.TestCase):
                     f"{rel(path)} 的 `{name}()` 没有转调 `apps.core.csv_export.{name}()` ——"
                     "自己拼一份就是第二条渲染路径，而两条路径迟早不一样。",
                 )
-        self.assertGreaterEqual(found, 6, f"只扫到 {found} 个转调点 —— 扫描面塌了")
+        self.assertGreaterEqual(found, 9, f"只扫到 {found} 个转调点 —— 扫描面塌了")
 
     def test_the_scan_surface_is_intact(self):
         """自证：扫描真的走到了那些模块，而不是「啥都没扫到所以全绿」。"""
@@ -492,6 +548,7 @@ class TestThereIsOnlyOneCsvRenderer(unittest.TestCase):
             "apps/core/csv_export.py",
             "apps/transactions/export_rules.py",
             "apps/analytics/dividend_export.py",
+            "apps/analytics/positions_export.py",
         ):
             self.assertIn(probe, files, f"扫描面漏了 {probe}")
         self.assertIn("apps/core/csv_export.py", self.sites["render_line"])

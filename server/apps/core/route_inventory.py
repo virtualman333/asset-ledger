@@ -500,3 +500,61 @@ def route_methods():
             out.setdefault(norm(base + "{id}/"), set()).update(detail)
     return {key: frozenset(value) for key, value in out.items()}
 
+
+# ---------------------------------------------------------------------------
+# README 里手抄的路由条数
+# ---------------------------------------------------------------------------
+
+#: README 里那几处**手抄**的数字 → 匹配它们的正则。
+#:
+#: 为什么要有这一段：`scripts/check_routes.py` 每跑一次都会把实测条数打印出来，而 README
+#: 里那句「实测 Django 认得 N 条、清单 M 条、共有路径 K 条」是**某一次**手跑的结果 ——
+#: 之后每加一条路由它都过期，且**没有任何东西会响**。本轮实测就是：新增一条
+#: `analytics/positions/export/` 之后 README 那三处数字全错，而全套检查照样绿。
+#:
+#: 正则失配（那句话被人改写了）**算问题**，不算「没什么可比」—— 后者是这类检查最经典的
+#: 恒真形态。每个键至少要命中一次，且每次命中的数都必须等于本轮实测值
+#: （同一件事在 README 里写了两遍的地方，两处都会被查 —— 那正是它们最容易漂的形态）。
+README_COUNT_PATTERNS = {
+    "django": r"Django\s*认得\s*\*{0,2}(\d+)\*{0,2}\s*条",
+    "inventory": r"清单\s*\*{0,2}(\d+)\*{0,2}\s*条",
+    "common": r"\*{0,2}(\d+)\s*条共有路径",
+    "format": r"DRF\s*那\s*(\d+)\s*条",
+}
+
+
+def readme_route_counts(text):
+    """README 文本 → `{键: [命中的数字, …]}`（按出现顺序，可能同一个键有多处）。"""
+    found = {}
+    for key, pattern in README_COUNT_PATTERNS.items():
+        found[key] = [int(m) for m in re.findall(pattern, text)]
+    return found
+
+
+def readme_count_problems(text, actual):
+    """README 里手抄的条数 vs 本轮实测 → 问题清单（空 = 一致）。
+
+    `actual` 是 `{同上那几个键: 实测整数}`。跳过的键（`actual` 里没有）**算问题** ——
+    静默跳过会让这条检查在「脚本哪天不再算某个数」时变成空话。
+    """
+    problems = []
+    found = readme_route_counts(text)
+    for key, pattern in README_COUNT_PATTERNS.items():
+        if key not in actual:
+            problems.append(f"README 条数检查少了一个实测值：{key}")
+            continue
+        hits = found[key]
+        if not hits:
+            problems.append(
+                f"README 里找不到描述「{key}」条数的那句话了（正则 {pattern!r} 一处都没匹配）—— "
+                "要么那句话被改写了，要么这个数被删了；改写得连正则一起改，别让它悄悄不再被检查"
+            )
+            continue
+        wrong = sorted({n for n in hits if n != actual[key]})
+        if wrong:
+            problems.append(
+                f"README 里手抄的「{key}」条数是 {wrong}，本轮实测是 {actual[key]} —— "
+                "文档过期了（改这句时不必改别的，写实测值就行）"
+            )
+    return problems
+

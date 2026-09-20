@@ -4,6 +4,7 @@ from .views import (
     CalendarView,
     DividendAnalyticsView,
     DividendExportView,
+    PositionsExportView,
     PositionsView,
     SummaryView,
 )
@@ -17,6 +18,7 @@ app_name = "analytics"
 #: 否则会被 `records/(?P<pk>[^/.]+)/` 当成主键吃掉。两处的约束不同，别照搬。）
 urlpatterns = [
     path("positions/", PositionsView.as_view(), name="positions"),
+    path("positions/export/", PositionsExportView.as_view(), name="positions-export"),
     path("summary/", SummaryView.as_view(), name="summary"),
     path("dividends/", DividendAnalyticsView.as_view(), name="dividends"),
     path("dividends/export/", DividendExportView.as_view(), name="dividend-export"),

@@ -4,6 +4,12 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.models import Market
+
+#: 持仓导出与股息导出有四个同名函数（`render_rows` / `export_names` / `content_disposition`
+#: 都是同一层的薄封装）。这里按模块 import 而不是逐个取名字：两边同名，取进来就得改名，
+#: 而改名之后「哪一行用的是哪一份」只能靠读定义 —— 这样刻意让它一眼可读。
+from . import positions_export
 from .dividend_export import (
     DIVIDEND_CSV_COLUMNS,
     content_disposition,
@@ -37,9 +43,50 @@ def _year_param(request, default=None):
         raise ValidationError(str(exc)) from exc
 
 
+#: 市场码 → 中文名。取自模型自己的 `TextChoices`，**不在这里抄第二份** ——
+#: 模型新增一个市场时这张表会自己带上它。认不出的码由 `positions_cells` 原样交出去。
+MARKET_LABELS = dict(Market.choices)
+
+
 class PositionsView(APIView):
     def get(self, request):
         return Response({"results": build_positions(request.user)})
+
+
+class PositionsExportView(APIView):
+    """`GET /analytics/positions/export/`：把持仓明细导成 Excel 能直接打开的 CSV。
+
+    **行来源与 `GET /analytics/positions/` 是同一个函数**（`services.build_positions`），
+    不另开一条聚合路径。持仓受五种流水影响（买 / 卖 / 拆股 / 股息归集 / 清仓后只剩
+    已实现盈亏），任何一处自己重算一遍都会在某个角落与页面上的数不一样 ——
+    而用户是拿这两个数对账的。页面有多少行，文件里就有多少行。
+
+    三格会**留空**而不是写 0：**现价 / 市值 / 浮动盈亏**在标的没有行情快照时是 `None`，
+    写 `0` 等于替用户在文件里宣布「这个标的现在不值钱」「这笔一分钱没赚没亏」，
+    而真相是库里连一条快照都没有。股息率同理（成本为 0 时算不出，不是 0%）。
+    口径写在 `positions_export` 的模块说明里，与股息导出那三列同一条规矩。
+
+    为什么流式吐：账本条数不该决定内存，也不能因为「行数太多」就静默截断 ——
+    截掉一部分的账目比慢一点严重得多。
+    """
+
+    def get(self, request):
+        positions = build_positions(request.user)
+
+        rows = (
+            positions_export.positions_row(pos, MARKET_LABELS, positions_export.POSITIONS_CSV_COLUMNS)
+            for pos in positions
+        )
+
+        ascii_name, unicode_name = positions_export.export_names()
+        response = StreamingHttpResponse(
+            positions_export.render_rows(rows, positions_export.POSITIONS_CSV_COLUMNS),
+            content_type="text/csv; charset=utf-8",
+        )
+        response["Content-Disposition"] = positions_export.content_disposition(
+            ascii_name, unicode_name
+        )
+        return response
 
 
 class SummaryView(APIView):

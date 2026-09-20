@@ -197,7 +197,7 @@ scripts/   工具脚本（入口：`scripts/run_checks.py`）
 两套（`PUT`/`PATCH`/`DELETE` 只在明细上，这就是「主要接口」给集合写 `GET/POST` 的原因）。
 **不认识的基类名一律抛异常，不猜** —— 猜出来的方法集会让契约为 405 放行。
 方法表自己也不是「自己写、自己信」：`scripts/check_routes.py` 拿 Django 本体的
-`callback.actions` / `callback.cls` 把它核过一遍（实测 28 条共有路径 0 分歧）。
+`callback.actions` / `callback.cls` 把它核过一遍（实测 29 条共有路径 0 分歧）。
 
 ## 快速开始
 
@@ -266,8 +266,9 @@ python scripts/smoke_record_flow.py --base http://127.0.0.1:8000
 
 - `check_routes.py` 里的**棘轮**（`FORMAT_VARIANT_COUNT`）与登记表，用处正是「变了就逼人
   回来看一眼」—— **一个没人跑的棘轮不是棘轮**，它连「没响过」都说不出来；
-- 这篇文档里那句「实测 `api/v1/` 下 Django 认得 29 条、清单 28 条、方法 28 条共有路径
-  0 分歧」是**某一次**手跑的结果，之后谁也没复核过。
+- 这篇文档里那句「实测 `api/v1/` 下 Django 认得多少条、共有路径逐条一致」是**某一次**手跑的结果，
+  之后谁也没复核过 —— 现在这几个数由 `check_routes.py` 的第 7 步每跑一次核一遍，
+  过期就在那一步红（见「路由清单与 Django 的对账」）。
 
 现在唯一入口是 `scripts/run_checks.py`：
 
@@ -304,15 +305,15 @@ python scripts/check_routes.py --diff   # 顺带把两侧差异逐条打出来
 
 它把 `get_resolver().url_patterns` 递归展开，与 `real_routes()` 做**两向**比对；
 **每条差异都必须落在脚本里的登记表里并写明理由**，没登记的就是失败（退出码 1）。
-实测：`api/v1/` 下 Django 认得 **29** 条，清单 **28** 条，唯一那条差异是 DefaultRouter 的
+实测：`api/v1/` 下 Django 认得 **30** 条，清单 **29** 条，唯一那条差异是 DefaultRouter 的
 API 根视图 `api/v1/transactions/`（不是注册出来的资源），已登记；**幻影路由 0 条**。
 DRF 那 11 条 `format` 后缀变体整族排除，条数用棘轮钉住 —— DRF 改了生成形状就会红。
 
 同一轮里这份清单还学会了推**方法**（`route_inventory.route_methods()`），于是脚本多了一
-步 `[5/6] 方法两向对账`：动词不在 `urls.py` 里，它长在视图对象上 —— 脚本从 Django 本体读
+步 `[5/7]` 方法两向对账：动词不在 `urls.py` 里，它长在视图对象上 —— 脚本从 Django 本体读
 （router 生成的路由读 `callback.actions` 的**键**；`.as_view()` 出来的类视图看 `callback.cls`
 有没有 `get`/`post`…；裸函数视图 Django 不限制方法，五个业务动词全接），只比五个业务动词
-（`head`/`options`/`trace` 是框架无条件回的）。实测 **28 条共有路径逐条一致、0 分歧**，
+（`head`/`options`/`trace` 是框架无条件回的）。实测 **29 条共有路径逐条一致、0 分歧**，
 登记表 `METHOD_DIFF_OK` 是空的。
 
 这一面必须由脚本兜着：单测那侧是**同一份源码**推出来的，改视图代码时两边一起变、永远一致，
@@ -320,6 +321,12 @@ DRF 那 11 条 `format` 后缀变体整族排除，条数用棘轮钉住 —— 
 几乎看不见 —— 负向验证的 X6 就是这一条：把 `ModelViewSet` 明细的 `delete` 抹掉，
 **整套单测一条都不红**（`python -m unittest discover -s apps -t .`；这句话不是手抄的 ——
 `test_no_django_required.py` 每次都会真的把整套跑一遍并要求 0 失败），只有脚本会红。
+
+`[7/7]` 核对的是**这一节里下面那几个手抄的数字**（Django 认得几条 / 清单几条 / 共有路径几条 /
+format 变体几条）：加一条路由就会让它们全部过期，而此前没有任何东西会响 —— 实测新增一条
+导出接口之后，这一节 + 「客户端打了哪些接口」那节共 4 处数字全错，而其余检查照样绿。
+判据在 `route_inventory.readme_count_problems()`（纯函数，有单测），正则失配也算失败：
+「那句话找不到了」不等于「没什么可比」。
 
 它**必须**是脚本而不是单测：本仓单测有一条硬承诺「不需要数据库、不需要 Django」，
 而 `apps/core/tests/test_no_django_required.py` 把「需要 Django 的模块数」钉死在
@@ -528,7 +535,39 @@ python -m unittest discover -s apps -t .
 
 这张表同样不是手抄完就算：`apps/core/tests/test_export_contract.py` 把它与 `apps/analytics/dividend_export.py` 的 `DIVIDEND_CSV_COLUMNS` 双向对齐（与流水那张表走同一个解析器、同一条判据）。
 
-BOM / CRLF / 公式注入防护 / 文件名给两份这几件事，两个导出**共用同一层实现**（`apps/core/csv_export.py`），行为逐字一致。有一条检查盯着「全仓只有一个渲染出口」：`render_line` / `sanitize_cell` / `quote_cell` 只许在那一个文件里定义，`BOM` / `EOL` 两个字面量也只许出现在那里，两个导出模块的同名函数必须**真的转调**它。各写一份的后果不是重复几十行，而是一个导出带 BOM、另一个不带 —— 你在同一个 Excel 里双击两个文件，一个中文正常、一个乱码。
+BOM / CRLF / 公式注入防护 / 文件名给两份这几件事，三份导出**共用同一层实现**（`apps/core/csv_export.py`），行为逐字一致。有一条检查盯着「全仓只有一个渲染出口」：`render_line` / `sanitize_cell` / `quote_cell` 只许在那一个文件里定义，`BOM` / `EOL` 两个字面量也只许出现在那里，各导出模块的同名函数必须**真的转调**它。各写一份的后果不是重复几十行，而是一个导出带 BOM、另一个不带 —— 你在同一个 Excel 里双击两个文件，一个中文正常、一个乱码。
+
+### 导出持仓（CSV）
+
+`GET /api/v1/analytics/positions/export/` 把持仓明细导成 CSV。
+
+**行来源与 `GET /analytics/positions/` 是同一个函数**（`services.build_positions`），没有第二条聚合路径。持仓受五种流水影响（买 / 卖 / 拆股 / 股息归集 / 清仓后只剩已实现盈亏），谁自己重算一遍都会在某个角落与页面上的数不一样 —— 而你是拿这两个数对账的。页面有多少行，文件里就有多少行。
+
+导出的列（顺序就是列序）：
+
+| 列 | 说明 |
+| --- | --- |
+| 标的代码 | `asset.symbol` |
+| 标的名称 | `asset.name` |
+| 市场 | `market` 的中文名（A股 / 港股 / 美股 / 基金 / 数字货币 / 外汇 / 其他），取自模型自己的 `TextChoices` |
+| 账户 | `account.name` |
+| 币种 | 这一行的成本与市值都是**这个币种**，没有折算 |
+| 持仓数量 | 当前持仓数量（卖出后归零的清仓行不会出现） |
+| 成本价 | 移动加权成本 |
+| 持仓成本 | 数量 × 成本价 |
+| 现价 | 最近一条行情快照的价格；**没有快照时留空** |
+| 市值 | 现价 × 数量；没有现价时留空 |
+| 浮动盈亏 | 市值 − 持仓成本；没有现价时留空 |
+| 已实现盈亏 | 卖出部分的已实现盈亏 |
+| 近一年股息 | 滚动 365 天的到手股息 |
+| 累计股息 | 全部已录入的到手股息（与统计页那个数是同一个归集函数） |
+| 股息率 | 近一年股息 ÷ 持仓成本。**是个比率**（`0.0325` 就是 3.25%），与 `/analytics/positions/` 里那个字段同值；成本为 0 时留空 |
+
+**现价 / 市值 / 浮动盈亏这三格在没有行情快照时是空格子，不是 `0`。** 写 `0` 等于替你在文件里宣布「这个标的现在不值钱」「这笔一分钱没赚没亏」，而真相是库里连一条快照都没有。股息率同理：成本为 0 时是「算不出」，不是「收益率 0%」。这条口径与股息导出那几列、以及 `apps/analytics/valuation.py`（无报价持仓按成本计、不按 0 计）是同一条。
+
+金额一律经 `apps/core/csv_export.fmt_decimal`：库里是 `DECIMAL(24,8)`，直接 `str()` 出来是 `1000.00000000`，而界面与接口上都是 `1000` —— 同一个数在两个出口读起来是两个数，只会让人以为其中一个错了。
+
+这张表同样不是手抄完就算：`apps/core/tests/test_export_contract.py` 把它与 `apps/analytics/positions_export.py` 的 `POSITIONS_CSV_COLUMNS` 双向对齐（与另两张表走同一个解析器、同一条判据）。
 
 ### 股息日历
 
@@ -606,6 +645,7 @@ GET  /api/v1/ingest/drafts/                        草稿箱
 POST /api/v1/ingest/drafts/{id}/confirm|discard    确认入账 / 丢弃
 GET  /api/v1/analytics/positions|summary|dividends
 GET  /api/v1/analytics/calendar/                   股息日历（三组 + 合计，支持 ?year=）
+GET  /api/v1/analytics/positions/export/           持仓导出 CSV（与 /analytics/positions/ 同源，缺报价的三格留空）
 GET  /api/v1/analytics/dividends/export/           股息导出 CSV（与「累计股息」同口径，支持 ?year=）
 ```
 
@@ -647,7 +687,7 @@ GET  /api/v1/analytics/dividends/export/           股息导出 CSV（与「累�
 - [x] M2 行情与收益：多源抓价、持仓、浮盈、XIRR 多币种折算
 - [x] M3 股息模块：股息记录、月度聚合、日历（日历是从**已录入的股息**排出来的，见「股息日历」）
 - [x] M4 Agent 链路：文本与截图识别 → 草稿箱 → 确认入账
-- [ ] M5 打磨：截图上传端上接入、图表、导出与导入 CSV（**流水与股息都已支持**）、通知、真机签名
+- [ ] M5 打磨：截图上传端上接入、图表、导出与导入 CSV（**流水导入 + 流水 / 股息 / 持仓三份导出都已支持**）、通知、真机签名
 
 ## 已知约束
 
