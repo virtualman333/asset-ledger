@@ -93,7 +93,45 @@ python manage.py refresh_quotes
 才当前缀（`usAAPL`、`USAAPL`、`usBRK.B`），其余当裸 ticker（`USB` → `usUSB`），
 两头都不像的（`usaapl`、`usB`）返回 `None` 并记一条 warning ——
 **少一个价，好过悄悄记一个错价。** 改动之前这两个写法都会被整串 `lower()`：
-`usAAPL` → `usaapl`、`USB` → `usb`，两个都是查不到、也不报错的代码。
+### 汇率（写入口也只有一个，而且「谁给的」是真值）
+
+折算（总资产、年化、股息合计）都要用汇率，`GET /market/fx/` 也报汇率。
+**这两个数以前可以不是同一个**，因为「什么时候该重新抓」在两个地方各写了一遍：
+
+| 地方 | 原来的判据 |
+| --- | --- |
+| `analytics/services.get_rate`（`/analytics/*` 走它） | 库里有记录就用 —— **没有任何新鲜度判据**，三个月前那一条照用 |
+| `market/views.FxView`（`/market/fx/` 走它） | 记录是当天的才用 |
+
+两边都不报错，只是同一天里两个接口给出两个汇率 —— 而用户正是拿这两个数互相对账的。
+现在只剩一处：**`server/apps/market/services.py` 的 `get_fx()`**，判据是一条纯函数
+`fx_source.is_fresh(row_date, today)`（当天的直接用，其余一律重新抓）。抓到就落库，
+抓不到不写空记录、把上一次的价交出去并把 `stale` 标出来 —— 与行情那条口径逐字一致。
+
+**`source` 不再是一个猜出来的值。** `FxRate.source` 原先恒等于第一家的名字，两处调用
+都是这么硬编码的 —— 可是 `fetch_fx` 有两家源，它原来只回一个 `Decimal`，调用方
+**无从知道这次是谁给的**。备用源顶上来的时候，库里那一行、以及 `/market/fx/` 回给
+客户端的 `source`，写的都是第一家，而这个值代码根本不知道。现在 `fetch_fx` 回的是
+`FxQuote(rate, source)`，`source` 就是实际给价的那一家；源名单与顺序是
+`apps/market/fx_source.py` 的 `FX_SOURCES` 一份，这张表就是它：
+
+| 源 | 接口 | 什么时候轮得到它 |
+| --- | --- | --- |
+| `frankfurter` | `api.frankfurter.app/latest?from=<base>&to=<quote>`（欧洲央行） | 第一顺位 |
+| `er-api` | `open.er-api.com/v6/latest/<base>` | 上一家挂了，或者它没有这个币种 |
+
+两家的响应形状不同，命中判据却是同一条：**`rates` 里有没有这个币种**。
+Frankfurter 的目标币种认不出时**不报错、也不给 `null`** —— `rates` 直接是空表；
+`open.er-api` 一次回一整张表、根本不接受目标币种。所以「响应里有 `rates`」不等于
+「拿到了这个币种」，而这一路读错只会表现为总资产悄悄不对。
+
+源名单、解析、以及「先问哪家」都在 `apps/market/fx_source.py`，**刻意不 import
+django** —— 与 `tencent.py` 同一条理由：这些错只会表现为**静默用旧汇率**，
+必须能注入假传输、离线秒级断言（`fetch_fx` 的 HTTP 由调用方注入）。
+`apps/market/tests/test_fx_source.py` 里除了行为断言，还有三条读源码的锁：
+`FxRate.objects` 只许出现在 `market/services.py` 一处、`analytics/services.py` 里
+不许再出现汇率表或 `update_or_create`、以及**两家的名字只许出现在 `fx_source.py`
+一个文件里** —— 别处再写一次，就是又猜了一次「谁给的」。
 
 
 ## 技术栈
@@ -626,6 +664,8 @@ GET  /api/v1/analytics/dividends/export/           股息导出 CSV（与「累�
 - 一轮的请求条数才是限流的实际口径：A 股 / 港股 / 美股**合并成一条请求**（每 60 个代码一条，
   腾讯接口本身支持多代码），其余市场逐只问各自的源。`manage.py refresh_quotes` 会把这一轮
   真的发了几条 HTTP 打出来
+- 汇率**按天缓存**（当天那条直接用，其余重新抓）：抓不到就退回上一条并把 `stale` 标出来，
+  `source` 是**实际给价的那一家**而不是写死的名字 —— 见上面「汇率（写入口也只有一个…）」
 - **多 worker 部署**（`gunicorn -w 4`）时只有抢到文件锁的那一个 worker 会真的抓行情，
   其余进程只跑 Web 请求 —— 这是刻意的，否则每轮会被放大成 N 遍。
   多机部署时每台机器各有一个调度器（锁是**本机**的，别放到网络盘上）

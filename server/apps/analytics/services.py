@@ -10,8 +10,8 @@ from django.utils import timezone
 
 from apps.accounts.models import Account
 from apps.assets.models import Asset
-from apps.market.models import FxRate, PriceQuote
-from apps.market.services import fetch_fx
+from apps.market.models import PriceQuote
+from apps.market.services import get_fx
 from apps.transactions.models import DividendRecord, Transaction
 
 from .dividend_income import (
@@ -32,23 +32,24 @@ STABLE_TO_USD = {"USDT": "USD", "USDC": "USD", "BUSD": "USD", "DAI": "USD", "TUS
 
 
 def get_rate(currency: str, base: str | None = None) -> Decimal:
-    """取当日汇率，缺失则现抓，抓不到返回 1（调用方需标注）。"""
+    """取当日汇率，缺失则现抓，抓不到返回 1（调用方需标注）。
+
+    **「查缓存 + 出网 + 落库」在 `market.services.get_fx()` 里，这里只做币种归一
+    与兜底。** 改动前这一份是自带的：自己查库、自己出网、自己写库，判据是
+    「库里有记录吗」—— 三个月前那一条会被一直用下去；而 `/market/fx/` 那一份
+    用的是「记录是不是当天的」。同一天里两个接口因此可以报出两个汇率，谁也不
+    报错，而用户正是拿这两个数互相对账的。
+    """
     base = base or settings.BASE_CURRENCY
     if not currency:
         return Decimal("1")
     currency = STABLE_TO_USD.get(currency.upper(), currency.upper())
     if currency == base.upper():
         return Decimal("1")
-    row = FxRate.objects.filter(base=currency, quote=base).order_by("-date").first()
-    if row:
-        return row.rate
-    rate = fetch_fx(currency, base)
-    if rate:
-        FxRate.objects.update_or_create(
-            base=currency, quote=base, date=timezone.localdate(), defaults={"rate": rate, "source": "frankfurter"}
-        )
-        return rate
-    return Decimal("1")
+    lookup = get_fx(currency, base)
+    # 抓不到、又没有任何旧记录时才给 1：`valuation.is_fx_missing` 靠这个 1 把
+    # 「这个币种的折算不可信」标出来（那边是唯一一处判据，见 valuation.py）。
+    return lookup.rate if lookup.rate is not None else Decimal("1")
 
 
 def latest_price(asset_id: int) -> Decimal | None:

@@ -21,8 +21,9 @@ from django.utils import timezone
 from apps.assets.models import Asset
 from apps.core.models import Market
 
-from . import tencent
-from .models import PriceQuote
+from . import fx_source, tencent
+from .fx_source import FxQuote
+from .models import FxRate, PriceQuote
 
 logger = logging.getLogger(__name__)
 TIMEOUT = 6
@@ -215,32 +216,88 @@ def fetch_quotes(
     return data, batches
 
 
-def fetch_fx(base: str, quote: str) -> Decimal | None:
-    """汇率。主源 Frankfurter（欧洲央行），备用 open.er-api.com，均免费无需 Key。"""
-    if base == quote:
-        return Decimal("1")
+def _fx_transport(url: str, params=None):
+    """汇率源的出网。**只负责发请求与解析 JSON** —— 源名单、顺序、两家的响应形状
+    都在 `fx_source` 里（那个模块不 import django，可以注入假传输离线断言）。"""
     try:
-        resp = _http_get(
-            "https://api.frankfurter.app/latest",
-            params={"from": base, "to": quote},
-            timeout=TIMEOUT,
-        )
-        rates = (resp.json() or {}).get("rates") or {}
-        value = rates.get(quote)
-        if value:
-            return Decimal(str(value))
+        return _http_get(url, params=params, headers=UA, timeout=TIMEOUT).json()
     except Exception as exc:
-        logger.warning("frankfurter failed %s/%s: %s", base, quote, exc)
+        logger.warning("汇率源出网失败 %s: %s", url, exc)
+        return None
 
-    try:
-        resp = _http_get(f"https://open.er-api.com/v6/latest/{base}", timeout=TIMEOUT)
-        rates = (resp.json() or {}).get("rates") or {}
-        value = rates.get(quote)
-        if value:
-            return Decimal(str(value))
-    except Exception as exc:
-        logger.warning("er-api failed %s/%s: %s", base, quote, exc)
-    return None
+
+def fetch_fx(base: str, quote: str) -> FxQuote | None:
+    """汇率。主源 Frankfurter（欧洲央行），备用 open.er-api.com，均免费无需 Key。
+
+    **回的是 `(汇率, 是谁给的)`，不是光秃秃一个数。** 以前只回数，于是两个调用方
+    都把 `source` 写死成第一家的名字：备用源顶上来的时候，库里那一行、以及
+    `/market/fx/` 回给客户端的 `source` 都是错的，而代码根本无从知道谁给的。
+
+    源名单、顺序、解析都在 `apps/market/fx_source.py`。
+    """
+    if base == quote:
+        # 同一个币种没有汇率可言（调用方一般自己先判了，这里兜住，别去问网络）
+        return FxQuote(rate=Decimal("1"), source="")
+    return fx_source.fetch_fx(base, quote, transport=_fx_transport)
+
+
+class FxLookup(NamedTuple):
+    """一次汇率查询的结果。
+
+    rate     拿到的汇率；`None` = 既没有可用的旧记录、这一轮也没抓到
+    source   实际给价的那一家的名字（同币种恒等时是空串）
+    date     这条汇率对应的日期
+    stale    交出去的是旧值（这一轮想抓但没抓到）
+    fetched  这一轮真的抓到了新值并落库
+    """
+
+    rate: Decimal | None
+    source: str
+    date: date | None
+    stale: bool
+    fetched: bool
+
+
+def get_fx(base: str, quote: str, *, today: date | None = None) -> FxLookup:
+    """取汇率。**全仓库唯一一处读 / 写 `FxRate` 的路径。**
+
+    判据只有一条（`fx_source.is_fresh`）：**当天的记录直接用，其余一律重新抓。**
+    改动前这条判据有两份、而且不一样（一份只看「库里有记录吗」，三个月前那一条
+    照用；另一份看「是不是当天的」），于是同一个页面上的两个汇率可以不是同一个数。
+
+    抓到了就落库，并把**实际给价的那一家**写进 `source`；抓不到就什么都不写，
+    把上一次的价交出去并标 `stale` —— 与行情那边「不写空记录」是同一条口径。
+    判据本身是纯函数（`is_fresh` / `latest`），所以它们可以不连库被单测压住；
+    这里只剩 ORM 与组装。
+    """
+    base = str(base or "").upper()
+    quote = str(quote or "").upper()
+    day = today or timezone.localdate()
+    if not base or not quote:
+        return FxLookup(None, "", None, stale=True, fetched=False)
+    if base == quote:
+        return FxLookup(Decimal("1"), "", day, stale=False, fetched=False)
+
+    cached = fx_source.latest(
+        FxRate.objects.filter(base=base, quote=quote).values_list("date", "rate", "source")
+    )
+    if cached is not None and fx_source.is_fresh(cached.date, day):
+        return FxLookup(cached.rate, cached.source, cached.date, stale=False, fetched=False)
+
+    fetched = fetch_fx(base, quote)
+    if fetched is None:
+        # 抓不到不写空记录 —— 与行情同一条口径
+        if cached is not None:
+            return FxLookup(cached.rate, cached.source, cached.date, stale=True, fetched=False)
+        return FxLookup(None, "", None, stale=True, fetched=False)
+
+    row = FxRate.objects.update_or_create(
+        base=base,
+        quote=quote,
+        date=day,
+        defaults={"rate": fetched.rate, "source": fetched.source},
+    )[0]
+    return FxLookup(row.rate, row.source, row.date, stale=False, fetched=True)
 
 
 def today() -> date:
