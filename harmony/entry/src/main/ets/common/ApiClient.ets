@@ -109,8 +109,12 @@ export class ApiClient {
   }
 }
 
-/** 数字格式化：统一保留两位小数并加千分位。 */
-export function fmt(value: string | undefined, digits: number = 2): string {
+/** 数字格式化：统一保留两位小数并加千分位。
+ *
+ * 参数收 `null`：后端有一批字段「算不出来」时给的是 `null`（不是 0）——
+ * 股息率在成本为 0（已清仓）时就是 `null`，而 `null` 与 `0` 对读者是两件事。
+ */
+export function fmt(value: string | null | undefined, digits: number = 2): string {
   if (!value) {
     return '-';
   }
@@ -121,8 +125,8 @@ export function fmt(value: string | undefined, digits: number = 2): string {
   return num.toFixed(digits);
 }
 
-/** 涨跌颜色：中国习惯，涨红跌绿。 */
-export function pnlColor(value: string | undefined): string {
+/** 涨跌颜色：中国习惯，涨红跌绿。参数收 `null` 的理由同 `fmt`。 */
+export function pnlColor(value: string | null | undefined): string {
   if (!value) {
     return '#8A8A8A';
   }
@@ -131,4 +135,33 @@ export function pnlColor(value: string | undefined): string {
     return '#8A8A8A';
   }
   return num > 0 ? '#E24B4A' : '#1D9E75';
+}
+
+/**
+ * 比率 → 百分数文本。**全客户端只有这一处**做这件事。
+ *
+ * 它原先散在三处各写一遍 `(x * 100).toFixed(2) + '%'`（统计页的年化、持仓页的年化、
+ * 收件箱的置信度），而现在股息率要加进来会变成第四处 —— 同一件事写四遍必然漂移。
+ *
+ * `null` / `undefined` / 空串 / 非数都返回 `'-'`：后端「算不出来」给的就是 `null`，
+ * 显示成 `0.00%` 会把「没有数据」说成「收益为零」。**`0` 本身照常显示 `0.00%`**。
+ */
+export function fmtPercent(value: string | number | null | undefined, digits: number = 2): string {
+  if (value === null || value === undefined || value === '') {
+    return '-';
+  }
+  const num = typeof value === 'number' ? value : parseFloat(value);
+  if (isNaN(num)) {
+    return '-';
+  }
+  return `${(num * 100).toFixed(digits)}%`;
+}
+
+/** 有没有一个「真的值得显示」的金额（空、非数、0 都算没有）。 */
+export function hasAmount(value: string | null | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const num = parseFloat(value);
+  return !isNaN(num) && num !== 0;
 }

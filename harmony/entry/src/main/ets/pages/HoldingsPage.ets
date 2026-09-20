@@ -1,4 +1,4 @@
-import { ApiClient, fmt, pnlColor } from '../common/ApiClient';
+import { ApiClient, fmt, fmtPercent, hasAmount, pnlColor } from '../common/ApiClient';
 import { Position, Summary } from '../common/Models';
 
 /** 持仓页：总览卡片 + 持仓列表，下拉/按钮均可刷新。 */
@@ -58,7 +58,7 @@ export struct HoldingsPage {
         }.width('100%').justifyContent(FlexAlign.SpaceBetween)
 
         if (this.summary.annualized !== null && this.summary.annualized !== undefined) {
-          Text(`年化 ${(this.summary.annualized * 100).toFixed(2)}%`)
+          Text(`年化 ${fmtPercent(this.summary.annualized)}`)
             .fontSize(12)
             .fontColor('#8A8A8A')
         }
@@ -111,6 +111,16 @@ export struct HoldingsPage {
                 Text(`${fmt(item.quantity, 4)} @ ${fmt(item.avg_cost)}`)
                   .fontSize(12)
                   .fontColor('#8A8A8A')
+                // 两个账户持同一标的时，上面三行会一模一样 —— 分不出是哪本账
+                Text(item.account_name).fontSize(11).fontColor('#B0B0B0')
+                // 「哪只标的在派息」原先整页看不出来：后端每一行都算了近一年股息与股息率，
+                // 有值才显示，免得没有分红的标的多出一行 '-'
+                if (hasAmount(item.annual_dividend)) {
+                  Text(`近一年股息 ${fmt(item.annual_dividend)}`).fontSize(11).fontColor('#7166F0')
+                }
+                if (hasAmount(item.dividend_yield)) {
+                  Text(`股息率 ${fmtPercent(item.dividend_yield)}`).fontSize(11).fontColor('#7166F0')
+                }
               }.alignItems(HorizontalAlign.Start).layoutWeight(1)
 
               Column({ space: 4 }) {
@@ -125,7 +135,9 @@ export struct HoldingsPage {
             .borderRadius(12)
             .backgroundColor('#FFFFFF')
           }
-        }, (item: Position) => `${item.asset_id}-${item.symbol}`)
+        // 键必须带账户：后端是按 (账户, 标的) 聚合的，同标的两账户会给出一模一样的
+        // `asset_id-symbol`，ForEach 撞键在 ArkUI 里表现为「有一行不见了」
+        }, (item: Position) => `${item.account_id}-${item.asset_id}`)
       }
       .width('100%')
       .layoutWeight(1)

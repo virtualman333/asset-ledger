@@ -1,4 +1,4 @@
-import { ApiClient, fmt, pnlColor } from '../common/ApiClient';
+import { ApiClient, fmt, fmtPercent, pnlColor } from '../common/ApiClient';
 import { DividendMonth, Summary } from '../common/Models';
 
 /** 统计页：收益总览 + 股息月度。 */
@@ -42,9 +42,18 @@ export struct StatsPage {
           this.row('浮动盈亏', fmt(this.summary.unrealized_pnl), pnlColor(this.summary.unrealized_pnl))
           this.row('已实现盈亏', fmt(this.summary.realized_pnl), pnlColor(this.summary.realized_pnl))
           this.row('累计股息', fmt(this.summary.dividend_total), '#7166F0')
+          // 下面四行是同一件事的收尾：这四个数后端早就按统一口径算好了、README 也
+          // 逐条写了含义，但客户端从来没声明过它们，于是「算出来了没人看得见」。
+          // 原先 README 把「股息率与月度被动收入尚未展示」写在「已知约束」里 ——
+          // 一条没人认领的 M5 待办。
+          this.row('总盈亏', fmt(this.summary.total_pnl), pnlColor(this.summary.total_pnl))
+          this.row('近一年股息', fmt(this.summary.dividend_annual), '#7166F0')
+          // 成本为 0（已清仓）时后端给的是 null，fmtPercent 会显示 '-' —— 刻意不显示 0%
+          this.row('股息率', fmtPercent(this.summary.dividend_yield), '#7166F0')
+          this.row('月度被动收入', fmt(this.summary.monthly_passive_income), '#1A1A1A')
           this.row(
             '年化',
-            this.summary.annualized === null ? '待计算' : `${(this.summary.annualized * 100).toFixed(2)}%`,
+            this.summary.annualized === null ? '待计算' : fmtPercent(this.summary.annualized),
             '#1A1A1A'
           )
           // 年化旁边那句解释以前算出来了却没显示：用户只看到「待计算」，

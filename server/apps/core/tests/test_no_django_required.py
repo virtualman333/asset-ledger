@@ -34,6 +34,14 @@
 （第一次跑挂了五分钟才被手工掐掉）。所以子进程里先把本模块换成空模块（`sys.modules`
 里塞一个空的 `ModuleType`），这样它贡献 0 条用例、不影响 `skipped` 这个数字。
 
+为什么「N 条单测」这个数字也由本模块看着
+----------------------------------------
+上面那个 `ran` 是**整套测试的真实条数**，而仓库里曾有一句话把它手抄下来：「`452` 条单测
+一条都不红」。这个数字**同时写在两处**（README 与 `scripts/run_checks.py`），两处都过期了
+—— 手抄的数字必然漂，而这句话的真值没人复核、也复核不了。真正有东西兜的是**后半句**
+（「一条都不红」）：本模块每次都会真的把整套跑一遍并要求 0 失败/0 错误。所以数字被删掉，
+换成一个不依赖条数的说法，并且由 `TestTheSuiteSizeIsNotHandCopied` 挡住它再长回来。
+
 跑法（在 server/ 下）：python -m unittest discover -s apps -t .
 """
 import ast
@@ -47,6 +55,9 @@ from pathlib import Path
 #: 本文件在 `server/apps/core/tests/` 下 —— 往上第三层才是 `server/`（跑测试的 cwd）
 SERVER = Path(__file__).resolve().parents[3]
 assert (SERVER / "manage.py").exists(), f"算错了 server 根：{SERVER} 下没有 manage.py"
+
+#: 仓库根（`ROOT` 这个词在下面的「手抄数字」那一节要用：它扫 README 与 scripts/）
+ROOT = SERVER.parent
 
 #: 本模块自己的点分路径（子进程里要把它换成空模块，见 `_CHILD_PRELUDE`）
 SELF_MODULE = ".".join(
@@ -245,6 +256,65 @@ class TestBlockerItselfIsEffective(unittest.TestCase):
         )
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("NOT_BLOCKED_OK True", p.stdout)
+
+
+class TestTheSuiteSizeIsNotHandCopied(unittest.TestCase):
+    """「N 条单测」这种手抄数字会漂 —— 同一个数字（`452`）曾同时写在 README 与
+    `scripts/run_checks.py` 里，两处都过期了。
+
+    这里不是要禁止写数字，而是要禁止**把整套测试的条数当结论写在文档/脚本里**：
+    它必然漂，且没有任何东西会提醒。真要提这件事，就提「整套测试都绿」—— 那半句由
+    上面那个 `TestSuiteRunsWithoutDjango` 每次真跑一遍兜着。
+    """
+
+    #: 「N 条单测 / 测试 / 用例」—— 手抄整套测试规模的那种写法
+    HAND_COPIED_RE = re.compile(r"\d+\s*条(?:单测|测试|用例)")
+
+    #: **本文件自己**不受这条约束：上面的反向对照必须真的把例子写出来，否则「扫描器有
+    #: 判别力」就成了空话。豁免不是白名单 —— `test_豁免不是空的` 断言这个文件里**确实**
+    #: 有那种写法，哪天真删了，那条会红。
+    SELF = Path(__file__).resolve()
+
+    @classmethod
+    def scanned_files(cls):
+        files = [ROOT / "README.md"]
+        files += [p for p in (ROOT / "scripts").glob("*.py") if "__pycache__" not in p.parts]
+        files += [p for p in (SERVER / "apps").rglob("*.py") if "__pycache__" not in p.parts]
+        return [p for p in files if p.is_file()]
+
+    def test_扫描面不是空的(self):
+        files = self.scanned_files()
+        self.assertGreaterEqual(len(files), 20, f"只扫到 {len(files)} 个文件")
+        self.assertTrue(any(p.name == "run_checks.py" for p in files), "连 run_checks.py 都没扫到")
+
+    def test_扫描器认得出这种写法(self):
+        """反向对照：不给它一个真例子，上面那条可能只是「一直没匹配上」。"""
+        sample = "实测 452 条单测一条都不红"
+        self.assertEqual(self.HAND_COPIED_RE.findall(sample), ["452 条单测"])
+        self.assertEqual(self.HAND_COPIED_RE.findall("整套单测一条都不红"), [])
+
+    def test_豁免不是空的(self):
+        """反向对照：豁免掉本文件，是因为**本文件里真的有**那种写法。"""
+        own = self.SELF.read_text(encoding="utf-8")
+        self.assertGreaterEqual(
+            len(self.HAND_COPIED_RE.findall(own)), 1,
+            "本文件里已经没有手抄条数的例子了 —— 那 SELF 这条豁免就该删掉",
+        )
+
+    def test_没有手抄的整套测试条数(self):
+        hits = []
+        for path in self.scanned_files():
+            if path.resolve() == self.SELF:
+                continue
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                for found in self.HAND_COPIED_RE.findall(line):
+                    hits.append(f"{path.relative_to(ROOT)}:{lineno} {found}")
+        self.assertEqual(
+            hits, [],
+            "这些地方手抄了整套测试的条数 —— 它必然漂，而且没人会复核。"
+            "改成「整套测试都绿」这种不依赖条数的说法，真值由本模块的 "
+            "TestSuiteRunsWithoutDjango 每次真跑一遍给出",
+        )
 
 
 if __name__ == "__main__":
