@@ -37,6 +37,22 @@
    解析成 `Decimal`，把 `None` 原样交给上层 —— 于是导入与 `POST /records/` 走的是
    同一套金额规则，包括「入金没填金额必须报错」那条。
 
+列集合是一份**划分**，而且会当场对账
+------------------------------------
+`CSV_COLUMNS` 里的每一列，要么被这一行**读走**（`CONSUMED_KEYS`），要么被**声明忽略**
+（`IGNORED_KEYS`），没有第三类。这条以前是「写在注释里的君子协定」：`CONSUMED_KEYS`
+是一份手抄的 12 项清单，`IGNORED_KEYS` 手抄 2 项，**两者全仓都没有消费方**
+（`git grep` 只有定义处）—— 一份没人读的清单既不会响，也拦不住漂移。
+
+于是真实的漏口在这里：往 `export_rules.CSV_COLUMNS` 加一列，`_aliases()` 会**现算**出
+新表头并放行，`build_row()` 按固定字段取值 —— 新列的值连一声都没响就没了。用户拿着
+新版导出的文件回导，得到的是一条条「成功」，而那一列全空。
+
+现在：`CONSUMED_KEYS` 从 `CSV_COLUMNS` 现算，`unhandled_columns()` 在 `resolve_headers()`
+里被**真的调用**，第三类列直接抛 `ImportFormatError`（400），点名是哪些列。
+行为层面的对账在 `tests/test_import_rules.py::ColumnCoverageTest`：按「换掉这一格的值，
+`build_row()` 的输出会不会变」现算消费集，再与声明的两份清单比对。
+
 本模块只用标准库，且不出现 BOM / EOL 字面量（`test_export_contract.py` 盯着
 「全仓只有 `apps/core/csv_export.py` 一处定义」）—— 它从那里 import。
 """
@@ -116,23 +132,23 @@ REQUIRED_KEYS = ("traded_at", "side_label", "account_name", "currency")
 
 #: 认得出、但**刻意不消费**的列：写进来不报错（自己导出的文件里必然有它们），
 #: 读进来会被忽略。理由见模块说明「导入方不负责的三件事」第 1 条。
+#: 这份清单是**声明意图**用的，由 `tests/test_import_rules.py::ColumnCoverageTest`
+#: 按行为反过来核对：换掉这一格的值，`build_row()` 的输出必须**不变**。
 IGNORED_KEYS = ("asset_name", "source_label")
 
-#: 这一行会真正被用到的取值键
-CONSUMED_KEYS = (
-    "traded_at",
-    "side_label",
-    "account_name",
-    "asset_symbol",
-    "quantity",
-    "price",
-    "amount",
-    "fee",
-    "tax",
-    "currency",
-    "fx_rate",
-    "note",
-)
+#: 这一行会真正被用到的取值键 —— **从 `CSV_COLUMNS` 现算**，不手抄第二份。
+#: 手抄的那一份（曾经的 12 项元组）全仓没有消费方：导出加一列它照旧 12 项，
+#: 既不会响也不会挡，只会让读代码的人以为有人管着。
+CONSUMED_KEYS = tuple(key for key, _title in CSV_COLUMNS if key not in IGNORED_KEYS)
+
+
+def unhandled_columns(keys) -> list:
+    """`keys` 里既没被这一行读、也没被声明忽略的列 —— 它们的值会被**静默丢掉**。
+
+    这是「导出加了列、导入还不知道」唯一会经过的地方。返回空列表＝这一批列都被安排过。
+    """
+    known = set(CONSUMED_KEYS) | set(IGNORED_KEYS)
+    return [key for key in keys if key not in known]
 
 #: 时间列的几种写法（文件里最可能出现的几种），按「越具体越先试」排
 DATETIME_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d")
@@ -250,6 +266,21 @@ def resolve_headers(header: list) -> dict:
     if missing:
         raise ImportFormatError(
             "缺少必需的列：%s" % "、".join(TITLES[key] for key in missing)
+        )
+    # 列集合必须是一份划分：读走的 ∪ 声明忽略的 = 全部。落在第三类里的列会被静默丢掉，
+    # 而「静默丢掉」正是这个模块最不该有的一种失败（用户拿到一屏「成功」，那一列全空）。
+    unhandled = unhandled_columns(index_to_key.values())
+    if unhandled:
+        # 中文名从**当前**的 CSV_COLUMNS 现取（它才是列清单的来源）；两边都报出来：
+        # 用户认表头，改代码的人认取值键。
+        titles = {key: title for key, title in CSV_COLUMNS}
+        named = "、".join(
+            f"{titles[key]}（{key}）" if key in titles else key for key in unhandled
+        )
+        raise ImportFormatError(
+            "这些列还不在导入的处理范围内：%s。导出的列清单（export_rules.CSV_COLUMNS）"
+            "加了新列，而 import_rules 既没读它、也没把它登记进 IGNORED_KEYS —— "
+            "照收不误就会把这一列的值悄悄丢掉。" % named
         )
     return index_to_key
 

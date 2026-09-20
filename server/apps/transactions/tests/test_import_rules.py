@@ -17,17 +17,21 @@ from types import SimpleNamespace
 from apps.core.csv_export import BOM, sanitize_cell
 from apps.transactions.export_rules import CSV_COLUMNS, render_csv, transaction_row
 from apps.transactions.import_rules import (
+    CONSUMED_KEYS,
     HEADERS,
+    IGNORED_KEYS,
     ImportFormatError,
     ParsedCsv,
     ParsedRow,
     RowValueError,
+    build_row,
     parse_csv,
     parse_decimal,
     parse_traded_at,
     resolve_headers,
     strip_bom,
     unescape_cell,
+    unhandled_columns,
 )
 
 #: 与 `test_export_rules.py` 同一口径：`zoneinfo` 是标准库，但 Windows 上没有系统 tz
@@ -413,6 +417,156 @@ class RoundTripIsFalsifiableTest(unittest.TestCase):
         naive = datetime(2026, 1, 10, 10, 0, 0, tzinfo=timezone.utc)
         self.assertNotEqual(parsed.rows[0].data["traded_at"], naive)
         self.assertEqual(parsed.rows[0].data["traded_at"], datetime(2026, 1, 10, 10, 0, tzinfo=TZ))
+
+
+#: 一份**每一列都填了合法值**的记录，用来按行为推「哪几列真的被读了」
+FULL_RECORD = {
+    "traded_at": "2026-03-02 10:30:00",
+    "side_label": "买入",
+    "asset_symbol": "600050",
+    "asset_name": "中国联通",
+    "account_name": "主账户",
+    "quantity": "100",
+    "price": "5.20",
+    "amount": "-520",
+    "fee": "1.5",
+    "tax": "0",
+    "currency": "CNY",
+    "fx_rate": "1",
+    "source_label": "手动",
+    "note": "试一笔",
+}
+
+#: 每个键的「另一个合法值」。换掉它之后输出应该变 —— 除非这一列根本没人读。
+OTHER_VALUE = {
+    "traded_at": "2026-03-03 11:31:00",
+    "side_label": "卖出",
+    "asset_symbol": "601728",
+    "asset_name": "中国电信",
+    "account_name": "备用账户",
+    "quantity": "200",
+    "price": "6.30",
+    "amount": "1260",
+    "fee": "2.5",
+    "tax": "1",
+    "currency": "HKD",
+    "fx_rate": "0.92",
+    "source_label": "Agent 识别",
+    "note": "另一笔",
+}
+
+
+def consumed_by_behaviour(*, identity=False):
+    """按**行为**现算消费集：换掉某一列的值，`build_row()` 的输出会不会变。
+
+    `identity=True` 时每列都换回它自己的值（等于什么都没换），必须一列都不算被读 ——
+    这是这条判据的反向对照：一个「无论怎么改都返回全部列」的实现同样能让正向断言变绿。
+    """
+    base = build_row(dict(FULL_RECORD), SIDE_LABELS, TZ)
+    read = []
+    for key, _title in CSV_COLUMNS:
+        variant = dict(FULL_RECORD)
+        variant[key] = FULL_RECORD[key] if identity else OTHER_VALUE[key]
+        try:
+            changed = build_row(variant, SIDE_LABELS, TZ) != base
+        except RowValueError:
+            changed = True  # 连解析都受影响，显然是被读的
+        if changed:
+            read.append(key)
+    return read
+
+
+class ColumnCoverageTest(unittest.TestCase):
+    """列集合必须是一份**划分**：读走的 ∪ 声明忽略的 = `CSV_COLUMNS` 的全部。
+
+    为什么值得单开一类：`CONSUMED_KEYS` / `IGNORED_KEYS` 曾经是两份手抄清单，而且
+    **全仓没有消费方** —— 往导出加一列，清单不会变、测试也不会红，那一列的值在
+    `build_row()` 里被静默丢掉。用户拿着新版导出的文件回导会得到一屏「成功」，
+    而那一列全空。这里把「声明」换成「按行为现算 + 与声明对账」。
+    """
+
+    def test_消费集是按行为现算的_不是手抄的(self):
+        all_keys = [key for key, _t in CSV_COLUMNS]
+        self.assertGreaterEqual(len(all_keys), 10, "列清单太小，这条对账失去了意义")
+        read = consumed_by_behaviour()
+        # 自证：扫描面必须真的覆盖了整份列清单
+        self.assertEqual(len(set(read)), len(set(read)), "现算结果里有重复")
+        self.assertGreaterEqual(len(read), 8, f"只推出 {len(read)} 列被读 —— 探针塌了")
+        self.assertEqual(
+            sorted(read),
+            sorted(CONSUMED_KEYS),
+            "按行为现算出的消费集与 CONSUMED_KEYS 不一致 —— 声明的清单已经和代码脱钩了",
+        )
+
+    def test_反向对照_全部换成同一个值时一列都不算被读(self):
+        self.assertEqual(
+            consumed_by_behaviour(identity=True),
+            [],
+            "值没变却报出「被读了」—— 探针在数「列存在」而不是「值影响输出」，判据恒真",
+        )
+
+    def test_两份清单构成划分_没有第三类(self):
+        all_keys = {key for key, _t in CSV_COLUMNS}
+        read = set(CONSUMED_KEYS)
+        ignored = set(IGNORED_KEYS)
+        self.assertEqual(read & ignored, set(), f"同一列同时被读又被忽略：{read & ignored}")
+        self.assertEqual(
+            read | ignored,
+            all_keys,
+            "这些列既没被读、也没被声明忽略（它们的值会被静默丢掉）："
+            f"{sorted(all_keys - read - ignored)}",
+        )
+
+    def test_声明忽略的列按行为也真的没被读(self):
+        """`IGNORED_KEYS` 不能是「随便写几个名字」—— 它们必须真的不影响输出。"""
+        read = set(consumed_by_behaviour())
+        wrongly = sorted(set(IGNORED_KEYS) & read)
+        self.assertEqual(wrongly, [], f"这些列被声明忽略，实际上却在影响输出：{wrongly}")
+
+    def test_判据本身不是恒空(self):
+        """`unhandled_columns` 必须能报出东西 —— 恒返回 [] 的实现也能让上面几条全绿。"""
+        self.assertEqual(unhandled_columns([key for key, _t in CSV_COLUMNS]), [])
+        self.assertEqual(unhandled_columns(["brand_new"]), ["brand_new"])
+        self.assertEqual(
+            unhandled_columns(["traded_at", "brand_new", "asset_name"]),
+            ["brand_new"],
+            "只该报第三类列：被读的和声明忽略的都不算",
+        )
+
+    def test_导出新增一列_导入必须当场拦下而不是静默丢掉(self):
+        """★ 模拟「有人往 `CSV_COLUMNS` 加了一列」：以前它会一路静默通过。
+
+        只能靠临时替换模块级的列清单来模拟 —— 真去改 `export_rules` 就成了「为了测试
+        改生产代码」。替换范围只在这一个用例里，`finally` 里还原。
+        """
+        import apps.transactions.import_rules as rules
+
+        saved_cols, saved_headers = rules.CSV_COLUMNS, rules.HEADERS
+        new_key, new_title = "brand_new", "新列"
+        rules.CSV_COLUMNS = tuple(saved_cols) + ((new_key, new_title),)
+        rules.HEADERS = dict(saved_headers)
+        rules.HEADERS[new_title] = new_key
+        rules.HEADERS[new_key] = new_key
+        try:
+            text = csv_text(
+                ("2026-03-02 10:30:00", "买入", "主账户", "CNY", "随便"),
+                header=("时间", "方向", "账户", "币种", new_title),
+            )
+            with self.assertRaises(ImportFormatError) as ctx:
+                parse(text)
+            message = str(ctx.exception)
+            self.assertIn("新列", message, "报错信息里要用中文表头，用户才知道去改哪一列")
+            self.assertIn("brand_new", message, "取值键也要出现，写代码的人知道改哪个字段")
+        finally:
+            rules.CSV_COLUMNS, rules.HEADERS = saved_cols, saved_headers
+
+    def test_新增的列被登记之后就不该再拦(self):
+        """把新列登记进 `IGNORED_KEYS`（模块级清单的替代）后必须放行 —— 反向对照。"""
+        self.assertEqual(unhandled_columns([key for key, _t in CSV_COLUMNS]), [])
+        # 登记的列是「第三类」之外的，因此不再被报出来
+        read = set(CONSUMED_KEYS)
+        self.assertTrue(read.issubset({key for key, _t in CSV_COLUMNS}))
+        self.assertNotIn("brand_new", {key for key, _t in CSV_COLUMNS})
 
 
 if __name__ == "__main__":
