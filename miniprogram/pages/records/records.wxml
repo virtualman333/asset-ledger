@@ -1,0 +1,42 @@
+<view class="page">
+    <view class="card">
+        <view class="card-title">流水筛选</view>
+        <picker mode="selector" range="{{sideLabels}}" value="{{sideIndex}}" bindchange="onSideChange">
+            <view class="picker"><text>方向</text><view class="grow right">{{sideLabels[sideIndex]}} <text class="picker-arrow">›</text></view></view>
+        </picker>
+        <view class="row">
+            <view class="grow"><label class="label">起始日期</label><picker mode="date" bindchange="onFromChange"><view class="picker">{{from || '不限'}} ›</view></picker></view>
+            <view class="grow"><label class="label">结束日期</label><picker mode="date" bindchange="onToChange"><view class="picker">{{to || '不限'}} ›</view></picker></view>
+        </view>
+        <label class="label">搜索备注 / 代码</label>
+        <input class="input" value="{{keyword}}" data-field="keyword" bindinput="onFieldInput" placeholder="可选" />
+        <view class="form-actions">
+            <button class="btn btn-ghost" bindtap="applyFilters">筛选</button>
+            <button class="btn btn-primary" bindtap="exportCsv">导出 CSV</button>
+        </view>
+    </view>
+
+    <view class="card-title" style="margin:8rpx 12rpx 18rpx">流水（{{records.length}}）</view>
+    <view class="loading" wx:if="{{loading}}"><view class="spinner"></view>加载中…</view>
+    <view class="error-box" wx:elif="{{error}}">{{error}}</view>
+    <view class="empty" wx:elif="{{records.length === 0}}">没有符合条件的流水。</view>
+
+    <view class="list-item" wx:for="{{records}}" wx:key="id">
+        <view class="row-between">
+            <view class="grow">
+                <view class="item-title">{{item.sideLabel}} {{item.symbol}}</view>
+                <view class="item-sub">{{item.tradedAt}} · {{item.accountName}}</view>
+            </view>
+            <view>
+                <view class="item-value {{item.trend}}">{{item.amount}}</view>
+                <view class="item-value-sub">{{item.currency}}</view>
+            </view>
+        </view>
+        <view class="divider" wx:if="{{item.note}}"></view>
+        <view class="row-between" wx:if="{{item.note}}">
+            <text class="small muted">{{item.note}}</text>
+            <button class="btn btn-danger" size="mini" data-id="{{item.id}}" bindtap="remove">删除</button>
+        </view>
+    </view>
+    <button class="btn btn-ghost btn-block" wx:if="{{next}}" bindtap="loadMore">加载更多</button>
+</view>

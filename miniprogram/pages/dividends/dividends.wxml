@@ -1,0 +1,60 @@
+<view class="page">
+    <view class="card">
+        <view class="row-between">
+            <view class="card-title" style="margin-bottom:0">股息明细</view>
+            <picker mode="selector" range="{{years}}" value="{{yearIndex}}" bindchange="onYearChange"><view class="tag">{{year}} 年 ›</view></picker>
+        </view>
+        <view class="divider"></view>
+        <button class="btn btn-primary btn-block" bindtap="showAdd">记录一笔股息</button>
+    </view>
+
+    <view class="loading" wx:if="{{loading}}"><view class="spinner"></view>加载中…</view>
+    <view class="error-box" wx:elif="{{error && !showForm}}">{{error}}</view>
+    <view class="empty" wx:elif="{{records.length === 0}}">这一年还没有股息明细。</view>
+
+    <view class="list-item" wx:for="{{records}}" wx:key="id">
+        <view class="row-between">
+            <view class="grow">
+                <view class="item-title">{{item.symbol}}</view>
+                <view class="item-sub">{{item.payDate}} · {{item.account}}<text wx:if="{{item.reinvested}}"> · {{item.reinvested}}</text></view>
+            </view>
+            <view>
+                <view class="item-value">{{item.net}}</view>
+                <view class="item-value-sub">{{item.currency}} 到手</view>
+            </view>
+        </view>
+        <view class="divider"></view>
+        <view class="row-between">
+            <text class="small muted">税前 {{item.gross}} · 税费 {{item.tax}}<text wx:if="{{item.exDate !== '—'}}"> · 除息 {{item.exDate}}</text></text>
+            <button class="btn btn-danger" size="mini" data-id="{{item.id}}" bindtap="remove">删除</button>
+        </view>
+    </view>
+
+    <view class="card" wx:if="{{showForm}}">
+        <view class="card-title">新增股息明细</view>
+        <picker mode="selector" range="{{assetNames}}" value="{{assetIndex}}" bindchange="onAssetChange">
+            <view class="picker"><text>标的</text><view class="grow right">{{assetNames[assetIndex] || '请先创建标的'}} ›</view></view>
+        </picker>
+        <picker mode="selector" range="{{accountNames}}" value="{{accountIndex}}" bindchange="onAccountChange" wx:if="{{accountNames.length}}">
+            <view class="picker"><text>账户</text><view class="grow right">{{accountNames[accountIndex]}} ›</view></view>
+        </picker>
+        <label class="label">派息日</label>
+        <picker mode="date" value="{{form.pay_date}}" bindchange="onDateChange"><view class="picker">{{form.pay_date}} ›</view></picker>
+        <view class="row">
+            <view class="grow"><label class="label">税前金额</label><input class="input" type="digit" value="{{form.gross}}" data-field="gross" bindinput="onFieldInput" /></view>
+            <view class="grow"><label class="label">税费</label><input class="input" type="digit" value="{{form.tax}}" data-field="tax" bindinput="onFieldInput" /></view>
+        </view>
+        <label class="label">到手净额（留空按税前-税费计算）</label>
+        <input class="input" type="digit" value="{{form.net}}" data-field="net" bindinput="onFieldInput" />
+        <picker mode="selector" range="{{currencies}}" value="{{currencyIndex}}" bindchange="onCurrencyChange"><view class="picker"><text>币种</text><text>{{currencies[currencyIndex]}} ›</text></view></picker>
+        <view class="row-between" style="margin-top:20rpx">
+            <text class="medium">是否再投资</text>
+            <switch checked="{{form.reinvested}}" bindchange="onReinvestToggle" color="#7166f0" />
+        </view>
+        <view class="inline-error" wx:if="{{error}}">{{error}}</view>
+        <view class="form-actions">
+            <button class="btn btn-ghost" bindtap="hideForm">取消</button>
+            <button class="btn btn-primary" bindtap="save">保存</button>
+        </view>
+    </view>
+</view>

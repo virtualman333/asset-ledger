@@ -1,0 +1,37 @@
+<view class="page">
+    <view class="card-title" style="margin:8rpx 12rpx 18rpx">我的账户</view>
+    <view class="loading" wx:if="{{loading}}"><view class="spinner"></view>加载中…</view>
+    <view class="error-box" wx:elif="{{error && !editing}}">{{error}}</view>
+    <view class="empty" wx:elif="{{accounts.length === 0}}">还没有账户，点下方新增。</view>
+    <view class="list-item" wx:for="{{accounts}}" wx:key="id">
+        <view class="row-between">
+            <view class="grow">
+                <view class="item-title">{{item.name}}</view>
+                <view class="item-sub">{{item.marketLabel}} · {{item.typeLabel}} · {{item.currency}}<text wx:if="{{item.broker}}"> · {{item.broker}}</text></view>
+            </view>
+            <view class="btn-row" style="width:auto">
+                <button class="btn btn-ghost" size="mini" data-id="{{item.id}}" bindtap="edit">编辑</button>
+                <button class="btn btn-danger" size="mini" data-id="{{item.id}}" bindtap="remove">删除</button>
+            </view>
+        </view>
+    </view>
+    <button class="btn btn-primary btn-block" bindtap="add">新增账户</button>
+
+    <view class="card" wx:if="{{editing}}" style="margin-top:24rpx">
+        <view class="card-title">{{form.id ? '编辑账户' : '新增账户'}}</view>
+        <label class="label">名称</label>
+        <input class="input" value="{{form.name}}" data-field="name" bindinput="onFieldInput" />
+        <label class="label">券商 / 机构</label>
+        <input class="input" value="{{form.broker}}" data-field="broker" bindinput="onFieldInput" />
+        <picker mode="selector" range="{{marketLabels}}" value="{{marketIndex}}" bindchange="onMarketChange"><view class="picker"><text>市场</text><text>{{marketLabels[marketIndex]}} ›</text></view></picker>
+        <picker mode="selector" range="{{typeLabels}}" value="{{typeIndex}}" bindchange="onTypeChange"><view class="picker"><text>类型</text><text>{{typeLabels[typeIndex]}} ›</text></view></picker>
+        <picker mode="selector" range="{{currencies}}" value="{{currencyIndex}}" bindchange="onCurrencyChange"><view class="picker"><text>币种</text><text>{{currencies[currencyIndex]}} ›</text></view></picker>
+        <label class="label">备注</label>
+        <input class="input" value="{{form.note}}" data-field="note" bindinput="onFieldInput" />
+        <view class="inline-error" wx:if="{{error}}">{{error}}</view>
+        <view class="form-actions">
+            <button class="btn btn-ghost" bindtap="cancel">取消</button>
+            <button class="btn btn-primary" bindtap="save">保存</button>
+        </view>
+    </view>
+</view>

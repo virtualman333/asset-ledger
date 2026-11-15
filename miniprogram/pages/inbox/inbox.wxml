@@ -1,0 +1,38 @@
+<view class="page">
+    <view class="card">
+        <view class="card-title">丢给 Agent 识别</view>
+        <text class="small muted">成交短信、券商通知原文，或一张截图。识别结果只进草稿，确认才入账。</text>
+        <textarea class="textarea" style="margin-top:18rpx" placeholder="例如：买入 贵州茅台 600519 数量 100 价格 1520.00 手续费 5.00" value="{{text}}" bindinput="onTextInput"></textarea>
+        <view class="inline-error" wx:if="{{error}}">{{error}}</view>
+        <view class="form-actions">
+            <button class="btn btn-ghost" bindtap="chooseImage" loading="{{submitting}}">上传截图</button>
+            <button class="btn btn-primary" bindtap="submitText" loading="{{submitting}}">识别文本</button>
+        </view>
+    </view>
+
+    <view class="card-title" style="margin:8rpx 12rpx 18rpx">草稿箱（{{drafts.length}}）</view>
+    <view class="loading" wx:if="{{loading}}"><view class="spinner"></view>正在加载草稿…</view>
+    <view class="error-box" wx:elif="{{error}}">{{error}}</view>
+    <view class="empty" wx:elif="{{drafts.length === 0}}">草稿箱是空的。</view>
+
+    <view class="list-item" wx:for="{{drafts}}" wx:key="id">
+        <view class="row-between" data-id="{{item.id}}" bindtap="openDraft">
+            <view class="grow">
+                <view class="item-title">{{item.sideLabel}} {{item.symbol}}</view>
+                <view class="item-sub">{{item.kind}} · 置信度 {{item.confidence}} · {{item.createdAt}}</view>
+            </view>
+            <view>
+                <view class="item-value">{{item.quantity}} × {{item.price}}</view>
+                <view class="item-value-sub">{{item.currency}}</view>
+            </view>
+        </view>
+        <view class="divider"></view>
+        <view class="row-between">
+            <text class="small {{item.missing.length ? 'muted' : 'bold'}}">{{item.missingText}}</text>
+            <view class="btn-row" style="width:auto">
+                <button class="btn btn-ghost" size="mini" data-id="{{item.id}}" data-url="{{item.evidenceUrl}}" catchtap="previewEvidence" wx:if="{{item.evidenceUrl}}">凭证</button>
+                <button class="btn btn-danger" size="mini" data-id="{{item.id}}" catchtap="discard">丢弃</button>
+            </view>
+        </view>
+    </view>
+</view>

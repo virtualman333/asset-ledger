@@ -1,0 +1,58 @@
+<view class="page">
+    <view class="card">
+        <view class="row-between">
+            <view class="card-title" style="margin-bottom:0">收益口径</view>
+            <picker mode="selector" range="{{years}}" value="{{yearIndex}}" bindchange="onYearChange">
+                <view class="tag">{{year}} 年 ›</view>
+            </picker>
+        </view>
+        <view class="divider"></view>
+        <view class="metric-grid">
+            <view class="metric"><view class="metric-inner"><text class="metric-label">持仓成本</text><text class="metric-value">{{costBasis}}</text></view></view>
+            <view class="metric"><view class="metric-inner"><text class="metric-label">市值</text><text class="metric-value">{{marketValue}}</text></view></view>
+            <view class="metric"><view class="metric-inner"><text class="metric-label">浮动盈亏</text><text class="metric-value">{{unrealized}}</text></view></view>
+            <view class="metric"><view class="metric-inner"><text class="metric-label">已实现盈亏</text><text class="metric-value">{{realized}}</text></view></view>
+            <view class="metric"><view class="metric-inner"><text class="metric-label">累计股息</text><text class="metric-value">{{dividendTotal}}</text></view></view>
+            <view class="metric"><view class="metric-inner"><text class="metric-label">总盈亏</text><text class="metric-value">{{totalPnl}}</text></view></view>
+            <view class="metric"><view class="metric-inner"><text class="metric-label">近一年股息</text><text class="metric-value">{{dividendAnnual}}</text></view></view>
+            <view class="metric"><view class="metric-inner"><text class="metric-label">股息率</text><text class="metric-value">{{dividendYield}}</text></view></view>
+            <view class="metric"><view class="metric-inner"><text class="metric-label">月度被动收入</text><text class="metric-value">{{monthlyPassive}}</text></view></view>
+            <view class="metric"><view class="metric-inner"><text class="metric-label">XIRR 年化</text><text class="metric-value">{{annualized}}</text></view></view>
+        </view>
+        <view class="notice" wx:if="{{valuationNote}}">{{valuationNote}}</view>
+        <text class="small muted">全部金额按 {{baseCurrency}} 折算。</text>
+    </view>
+
+    <view class="card">
+        <view class="card-title">股息月度分布 · {{year}}</view>
+        <view class="loading" wx:if="{{loading}}"><view class="spinner"></view>加载中…</view>
+        <view class="empty" wx:elif="{{months.length === 0}}">这一年还没有股息记录。</view>
+        <view class="section-item" wx:for="{{months}}" wx:key="month" style="margin-bottom:18rpx">
+            <view class="row-between"><text class="medium">{{item.month}}</text><text class="medium bold">{{item.net}} <text class="small muted">· {{item.count}} 笔</text></text></view>
+            <view class="bar-track"><view class="bar-fill" style="width:{{item.width}}%"></view></view>
+        </view>
+    </view>
+
+    <view class="card">
+        <view class="card-title">股息日历</view>
+        <view class="row-between"><text class="small muted">下一派息日 {{nextPayDate}}</text><button class="btn btn-ghost" size="mini" bindtap="goCalendar">查看全部</button></view>
+        <view class="divider"></view>
+        <view class="item-sub" wx:if="{{upcoming.length === 0 && received.length === 0 && undated.length === 0}}">暂无股息日历条目。</view>
+        <block wx:for="{{upcoming}}" wx:key="symbol">
+            <view class="row-between" style="margin-bottom:12rpx"><text class="medium">{{item.symbol}} · {{item.payDate}}</text><text class="medium">{{item.amount}} {{item.currency}}</text></view>
+        </block>
+    </view>
+
+    <view class="card">
+        <view class="card-title">导出与导入</view>
+        <text class="small muted">导出 CSV 会在聊天里生成文件，可转发到电脑用 Excel 打开。</text>
+        <view class="filter-row" style="margin-top:20rpx">
+            <button class="btn btn-ghost" data-kind="records" bindtap="exportCsv">流水 CSV</button>
+            <button class="btn btn-ghost" data-kind="positions" bindtap="exportCsv">持仓 CSV</button>
+            <button class="btn btn-ghost" data-kind="dividends" bindtap="exportCsv">股息 CSV</button>
+        </view>
+        <view class="form-actions"><button class="btn btn-primary btn-block" bindtap="goImport">导入流水 CSV</button></view>
+    </view>
+
+    <view class="error-box" wx:if="{{error}}">{{error}}</view>
+</view>

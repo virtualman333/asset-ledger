@@ -1,0 +1,37 @@
+<view class="page">
+    <view class="card">
+        <view class="row-between">
+            <view class="card-title" style="margin-bottom:0">持仓行情</view>
+            <button class="btn btn-ghost" size="mini" bindtap="refresh" loading="{{refreshing}}">强制刷新</button>
+        </view>
+        <view class="divider"></view>
+        <text class="small muted">免费源约 15 分钟更新一轮；拿不到价时显示旧价并标记「旧价」。</text>
+    </view>
+
+    <view class="loading" wx:if="{{loading}}"><view class="spinner"></view>加载中…</view>
+    <view class="error-box" wx:elif="{{error}}">{{error}}</view>
+    <view class="empty" wx:elif="{{quotes.length === 0}}">还没有持仓标的。</view>
+
+    <view class="list-item" wx:for="{{quotes}}" wx:key="id">
+        <view class="row-between">
+            <view class="grow">
+                <view class="item-title">{{item.symbol}} <text class="small muted">{{item.name}}</text></view>
+                <view class="item-sub">{{item.fetchedAt}} · {{item.source}} <text wx:if="{{item.stale}}">· {{item.stale}}</text></view>
+            </view>
+            <view>
+                <view class="item-value">{{item.price}}</view>
+                <view class="item-value-sub {{item.changeTrend}}">{{item.change}}</view>
+            </view>
+        </view>
+    </view>
+
+    <view class="card">
+        <view class="card-title">汇率查询</view>
+        <view class="row">
+            <view class="grow"><picker mode="selector" range="{{currencies}}" value="{{baseIndex}}" bindchange="onBaseChange"><view class="picker">从 {{fxBase}} ›</view></picker></view>
+            <view class="grow"><picker mode="selector" range="{{currencies}}" value="{{quoteIndex}}" bindchange="onQuoteChange"><view class="picker">到 {{fxQuote}} ›</view></picker></view>
+        </view>
+        <view class="form-actions"><button class="btn btn-primary btn-block" bindtap="loadFx">查询汇率</button></view>
+        <view class="notice" wx:if="{{fxResult}}">{{fxResult}}</view>
+    </view>
+</view>

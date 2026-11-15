@@ -1,0 +1,29 @@
+<view class="page">
+    <view class="card">
+        <view class="row-between">
+            <view class="card-title" style="margin-bottom:0">股息日历</view>
+            <picker mode="selector" range="{{years}}" value="{{yearIndex}}" bindchange="onYearChange"><view class="tag">{{year}} 年 ›</view></picker>
+        </view>
+        <view class="divider"></view>
+        <text class="small muted">基准日 {{asOf}} · 日历由已录入的股息推导，不预测未来公告。</text>
+    </view>
+
+    <view class="loading" wx:if="{{loading}}"><view class="spinner"></view>加载中…</view>
+    <view class="error-box" wx:elif="{{error}}">{{error}}</view>
+
+    <block wx:for="{{groups}}" wx:key="key">
+        <view class="card-title" style="margin:16rpx 12rpx">{{item.title}}（{{item.list.length}}）</view>
+        <view class="list-item" wx:for="{{item.list}}" wx:for-item="row" wx:key="symbol">
+            <view class="row-between">
+                <view class="grow">
+                    <view class="item-title">{{row.symbol}} <text class="small muted">{{row.assetName}}</text></view>
+                    <view class="item-sub">{{row.accountName}} · {{row.origin}}</view>
+                </view>
+                <view>
+                    <view class="item-value">{{row.amount}} <text class="small">{{row.currency}}</text></view>
+                    <view class="item-value-sub">{{row.payDate}}<text wx:if="{{row.daysUntil >= 0}}"> · {{row.daysUntil}} 天后</text></view>
+                </view>
+            </view>
+        </view>
+    </block>
+</view>

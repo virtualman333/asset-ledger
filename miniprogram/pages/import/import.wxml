@@ -1,0 +1,26 @@
+<view class="page">
+    <view class="card">
+        <view class="card-title">导入流水 CSV</view>
+        <text class="small muted">列名与「导出流水 CSV」一致。文件需为 UTF-8 编码；可直接从微信聊天里选 CSV 文件。</text>
+        <view class="form-actions">
+            <button class="btn btn-ghost btn-block" bindtap="chooseFile">从聊天选择 CSV</button>
+        </view>
+        <label class="label">或直接粘贴 CSV 文本</label>
+        <textarea class="textarea" placeholder="时间,方向,账户,币种&#10;2026-11-15 09:30:00,买入,证券账户,CNY" value="{{csv}}" bindinput="onCsvInput"></textarea>
+        <view class="row-between" style="margin-top:20rpx">
+            <text class="medium">先校验不落库</text>
+            <switch checked="{{dryRun}}" bindchange="onDryRunChange" color="#7166f0" />
+        </view>
+        <label class="label">幂等前缀（重复导入不会记两遍）</label>
+        <input class="input" value="{{prefix}}" bindinput="onPrefixInput" />
+        <view class="inline-error" wx:if="{{error}}">{{error}}</view>
+        <view class="form-actions"><button class="btn btn-primary btn-block" loading="{{loading}}" bindtap="submit">{{dryRun ? '校验' : '导入'}}</button></view>
+    </view>
+
+    <view class="card" wx:if="{{result}}">
+        <view class="card-title">{{result.headline}}</view>
+        <block wx:for="{{result.failed}}" wx:key="line">
+            <view class="item-sub" style="margin-bottom:10rpx">第 {{item.line}} 行：{{item.error}}</view>
+        </block>
+    </view>
+</view>

@@ -1,0 +1,45 @@
+<view class="page">
+    <view class="loading" wx:if="{{loading}}"><view class="spinner"></view>加载草稿…</view>
+    <view class="error-box" wx:elif="{{error && !draft}}">{{error}}</view>
+
+    <block wx:if="{{draft}}">
+        <view class="card">
+            <view class="card-title">核对识别结果</view>
+            <view class="tag-wrap">
+                <text class="tag">{{draft.kind}}</text>
+                <text class="tag">置信度 {{draft.confidence}}</text>
+                <text class="tag tag-muted" wx:for="{{draft.missing}}" wx:key="*this">缺 {{item}}</text>
+            </view>
+            <view class="divider"></view>
+            <text class="small muted">原文：{{draft.rawText}}</text>
+        </view>
+
+        <view class="card">
+            <view class="card-title">可修改字段（改完才入账）</view>
+            <label class="label">标的代码</label>
+            <input class="input" value="{{overrides.symbol}}" data-field="symbol" bindinput="onFieldInput" />
+            <picker mode="selector" range="{{sideLabels}}" value="{{sideIndex}}" bindchange="onSideChange">
+                <view class="picker"><text>方向</text><text>{{sideLabels[sideIndex] || '请选择'}} ›</text></view>
+            </picker>
+            <view class="row">
+                <view class="grow"><label class="label">数量</label><input class="input" type="digit" value="{{overrides.quantity}}" data-field="quantity" bindinput="onFieldInput" /></view>
+                <view class="grow"><label class="label">单价</label><input class="input" type="digit" value="{{overrides.price}}" data-field="price" bindinput="onFieldInput" /></view>
+            </view>
+            <label class="label">现金变动（出入金必填）</label>
+            <input class="input" type="digit" value="{{overrides.amount}}" data-field="amount" bindinput="onFieldInput" />
+            <view class="row">
+                <view class="grow"><label class="label">手续费</label><input class="input" type="digit" value="{{overrides.fee}}" data-field="fee" bindinput="onFieldInput" /></view>
+                <view class="grow"><label class="label">税费</label><input class="input" type="digit" value="{{overrides.tax}}" data-field="tax" bindinput="onFieldInput" /></view>
+            </view>
+            <picker mode="selector" range="{{currencies}}" value="{{currencyIndex}}" bindchange="onCurrencyChange"><view class="picker"><text>币种</text><text>{{currencies[currencyIndex]}} ›</text></view></picker>
+            <picker mode="selector" range="{{accountNames}}" value="{{accountIndex}}" bindchange="onAccountChange" wx:if="{{accountNames.length}}">
+                <view class="picker"><text>账户</text><text>{{accountNames[accountIndex]}} ›</text></view>
+            </picker>
+            <view class="inline-error" wx:if="{{error}}">{{error}}</view>
+            <view class="form-actions">
+                <button class="btn btn-ghost" bindtap="cancel">返回</button>
+                <button class="btn btn-primary" loading="{{submitting}}" bindtap="confirm">确认入账</button>
+            </view>
+        </view>
+    </block>
+</view>

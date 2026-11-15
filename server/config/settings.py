@@ -28,6 +28,9 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "rest_framework_simplejwt",
+    # ROTATE_REFRESH_TOKENS + BLACKLIST_AFTER_ROTATION 需要这张黑名单表；
+    # 不装它，刷新令牌一旦轮换就会在写黑名单时报错，客户端自动续期随之失效。
+    "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "django_filters",
     "apps.core",

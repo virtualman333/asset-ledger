@@ -1,0 +1,420 @@
+{
+  "accounts": {
+    "count": 3,
+    "next": null,
+    "previous": null,
+    "results": [
+      {
+        "id": 3,
+        "name": "OKX 现货",
+        "broker": "OKX",
+        "market": "CRYPTO",
+        "account_type": "BROKER",
+        "currency": "USDT",
+        "note": "",
+        "created_at": "2026-11-15T10:59:45.505045+08:00",
+        "updated_at": "2026-11-15T10:59:45.505077+08:00"
+      },
+      {
+        "id": 2,
+        "name": "老虎证券",
+        "broker": "Tiger",
+        "market": "US",
+        "account_type": "BROKER",
+        "currency": "USD",
+        "note": "",
+        "created_at": "2026-11-15T10:59:45.497957+08:00",
+        "updated_at": "2026-11-15T10:59:45.497979+08:00"
+      },
+      {
+        "id": 1,
+        "name": "华泰证券",
+        "broker": "华泰",
+        "market": "A",
+        "account_type": "BROKER",
+        "currency": "CNY",
+        "note": "",
+        "created_at": "2026-11-15T10:59:45.489389+08:00",
+        "updated_at": "2026-11-15T10:59:45.489421+08:00"
+      }
+    ]
+  },
+  "assets": {
+    "count": 4,
+    "next": null,
+    "previous": null,
+    "results": [
+      {
+        "id": 1,
+        "symbol": "600519",
+        "name": "贵州茅台",
+        "market": "A",
+        "asset_type": "STOCK",
+        "currency": "CNY",
+        "is_dividend_asset": true,
+        "note": "",
+        "created_at": "2026-11-15T10:59:45.512404+08:00",
+        "updated_at": "2026-11-15T10:59:45.512431+08:00"
+      },
+      {
+        "id": 4,
+        "symbol": "601398",
+        "name": "工商银行",
+        "market": "A",
+        "asset_type": "STOCK",
+        "currency": "CNY",
+        "is_dividend_asset": true,
+        "note": "",
+        "created_at": "2026-11-15T11:01:48.328339+08:00",
+        "updated_at": "2026-11-15T11:01:48.328361+08:00"
+      },
+      {
+        "id": 2,
+        "symbol": "AAPL",
+        "name": "Apple",
+        "market": "US",
+        "asset_type": "STOCK",
+        "currency": "USD",
+        "is_dividend_asset": true,
+        "note": "",
+        "created_at": "2026-11-15T10:59:45.520036+08:00",
+        "updated_at": "2026-11-15T10:59:45.520058+08:00"
+      },
+      {
+        "id": 3,
+        "symbol": "BTC",
+        "name": "Bitcoin",
+        "market": "CRYPTO",
+        "asset_type": "STOCK",
+        "currency": "USDT",
+        "is_dividend_asset": false,
+        "note": "",
+        "created_at": "2026-11-15T10:59:45.528384+08:00",
+        "updated_at": "2026-11-15T10:59:45.528413+08:00"
+      }
+    ]
+  },
+  "assetsSearch": {
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "results": [
+      {
+        "id": 1,
+        "symbol": "600519",
+        "name": "贵州茅台",
+        "market": "A",
+        "asset_type": "STOCK",
+        "currency": "CNY",
+        "is_dividend_asset": true,
+        "note": "",
+        "created_at": "2026-11-15T10:59:45.512404+08:00",
+        "updated_at": "2026-11-15T10:59:45.512431+08:00"
+      }
+    ]
+  },
+  "calendar": {
+    "as_of": "2026-11-15",
+    "upcoming": [],
+    "received": [
+      {
+        "asset_id": 1,
+        "account_id": 1,
+        "currency": "CNY",
+        "amount": "800",
+        "pay_date": "2026-11-15",
+        "ex_date": null,
+        "days_until": 0,
+        "origin": "record",
+        "reinvested": false,
+        "record_id": 1,
+        "transaction_id": 5,
+        "symbol": "600519",
+        "asset_name": "贵州茅台",
+        "account_name": "华泰证券"
+      }
+    ],
+    "undated": [],
+    "totals": {
+      "count": 1,
+      "by_currency": {
+        "CNY": "800"
+      },
+      "upcoming_by_currency": {},
+      "received_by_currency": {
+        "CNY": "800"
+      },
+      "undated_by_currency": {},
+      "upcoming_count": 0,
+      "next_pay_date": null
+    }
+  },
+  "dividendRecords": {
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "results": [
+      {
+        "id": 1,
+        "asset": 1,
+        "account": 1,
+        "transaction": 5,
+        "ex_date": null,
+        "pay_date": "2026-11-15",
+        "amount_per_share": "8.00000000",
+        "shares": "100.00000000",
+        "gross": "800.00000000",
+        "tax": "0.00000000",
+        "net": "800.00000000",
+        "currency": "CNY",
+        "reinvested": false,
+        "created_at": "2026-11-15T10:59:45.576155+08:00",
+        "updated_at": "2026-11-15T10:59:45.576175+08:00"
+      }
+    ]
+  },
+  "dividends": {
+    "year": 2026,
+    "months": [
+      {
+        "month": "2026-11",
+        "net": "800.00000000",
+        "gross": "800.00000000",
+        "tax": "0",
+        "count": 1
+      }
+    ]
+  },
+  "drafts": {
+    "results": []
+  },
+  "positions": {
+    "results": [
+      {
+        "account_id": 1,
+        "account_name": "华泰证券",
+        "asset_id": 1,
+        "symbol": "600519",
+        "name": "贵州茅台",
+        "market": "A",
+        "currency": "CNY",
+        "quantity": "100.00000000",
+        "cost_basis": "168005.0000000000000000",
+        "realized_pnl": "0",
+        "dividend_total": "800.00000000",
+        "avg_cost": "1680.05000000",
+        "annual_dividend": "800.00000000",
+        "dividend_yield": "0.004761763042766584327847385494",
+        "last_price": "1435.26000000",
+        "market_value": "143526.0000000000000000",
+        "unrealized_pnl": "-24479.0000000000000000"
+      },
+      {
+        "account_id": 3,
+        "account_name": "OKX 现货",
+        "asset_id": 3,
+        "symbol": "BTC",
+        "name": "Bitcoin",
+        "market": "CRYPTO",
+        "currency": "USDT",
+        "quantity": "0.50000000",
+        "cost_basis": "30006.0000000000000000",
+        "realized_pnl": "0",
+        "dividend_total": "0",
+        "avg_cost": "60012.00000000",
+        "annual_dividend": "0",
+        "dividend_yield": "0E+16",
+        "last_price": null,
+        "market_value": null,
+        "unrealized_pnl": null
+      },
+      {
+        "account_id": 2,
+        "account_name": "老虎证券",
+        "asset_id": 2,
+        "symbol": "AAPL",
+        "name": "Apple",
+        "market": "US",
+        "currency": "USD",
+        "quantity": "10.00000000",
+        "cost_basis": "1801.0000000000000000",
+        "realized_pnl": "0",
+        "dividend_total": "0",
+        "avg_cost": "180.10000000",
+        "annual_dividend": "0",
+        "dividend_yield": "0E+16",
+        "last_price": "356.27000000",
+        "market_value": "3562.7000000000000000",
+        "unrealized_pnl": "1761.7000000000000000"
+      }
+    ]
+  },
+  "records": {
+    "count": 5,
+    "next": null,
+    "previous": null,
+    "results": [
+      {
+        "id": 1,
+        "account": 1,
+        "asset": null,
+        "side": "DEPOSIT",
+        "quantity": null,
+        "price": null,
+        "amount": "100000.00000000",
+        "fee": "0.00000000",
+        "tax": "0.00000000",
+        "currency": "CNY",
+        "fx_rate": "1.00000000",
+        "traded_at": "2026-11-15T10:59:45.537122+08:00",
+        "source": "MANUAL",
+        "evidence": null,
+        "client_request_id": null,
+        "note": "",
+        "created_at": "2026-11-15T10:59:45.539263+08:00",
+        "updated_at": "2026-11-15T10:59:45.539284+08:00"
+      },
+      {
+        "id": 2,
+        "account": 1,
+        "asset": 1,
+        "side": "BUY",
+        "quantity": "100.00000000",
+        "price": "1680.00000000",
+        "amount": "-168005.00000000",
+        "fee": "5.00000000",
+        "tax": "0.00000000",
+        "currency": "CNY",
+        "fx_rate": "1.00000000",
+        "traded_at": "2026-11-15T10:59:45.537122+08:00",
+        "source": "MANUAL",
+        "evidence": null,
+        "client_request_id": null,
+        "note": "",
+        "created_at": "2026-11-15T10:59:45.546742+08:00",
+        "updated_at": "2026-11-15T10:59:45.546776+08:00"
+      },
+      {
+        "id": 3,
+        "account": 2,
+        "asset": 2,
+        "side": "BUY",
+        "quantity": "10.00000000",
+        "price": "180.00000000",
+        "amount": "-1801.00000000",
+        "fee": "1.00000000",
+        "tax": "0.00000000",
+        "currency": "USD",
+        "fx_rate": "1.00000000",
+        "traded_at": "2026-11-15T10:59:45.537122+08:00",
+        "source": "MANUAL",
+        "evidence": null,
+        "client_request_id": null,
+        "note": "",
+        "created_at": "2026-11-15T10:59:45.554038+08:00",
+        "updated_at": "2026-11-15T10:59:45.554060+08:00"
+      },
+      {
+        "id": 4,
+        "account": 3,
+        "asset": 3,
+        "side": "BUY",
+        "quantity": "0.50000000",
+        "price": "60000.00000000",
+        "amount": "-30006.00000000",
+        "fee": "6.00000000",
+        "tax": "0.00000000",
+        "currency": "USDT",
+        "fx_rate": "1.00000000",
+        "traded_at": "2026-11-15T10:59:45.537122+08:00",
+        "source": "MANUAL",
+        "evidence": null,
+        "client_request_id": null,
+        "note": "",
+        "created_at": "2026-11-15T10:59:45.561922+08:00",
+        "updated_at": "2026-11-15T10:59:45.561941+08:00"
+      },
+      {
+        "id": 5,
+        "account": 1,
+        "asset": 1,
+        "side": "DIVIDEND",
+        "quantity": "100.00000000",
+        "price": "8.00000000",
+        "amount": "800.00000000",
+        "fee": "0.00000000",
+        "tax": "0.00000000",
+        "currency": "CNY",
+        "fx_rate": "1.00000000",
+        "traded_at": "2026-11-15T10:59:45.537122+08:00",
+        "source": "MANUAL",
+        "evidence": null,
+        "client_request_id": null,
+        "note": "",
+        "created_at": "2026-11-15T10:59:45.567971+08:00",
+        "updated_at": "2026-11-15T10:59:45.567991+08:00"
+      }
+    ]
+  },
+  "summary": {
+    "base_currency": "CNY",
+    "market_value": "167295.9781300000000000000000",
+    "unpriced_cost_basis": "200197.0314000000000000000000",
+    "unpriced_symbols": [
+      "BTC"
+    ],
+    "cost_basis": "380218.1233000000000000000000",
+    "unrealized_pnl": "-12725.11377000000000000000000",
+    "realized_pnl": "0E-8",
+    "dividend_total": "800.00000000",
+    "dividend_annual": "800.00000000",
+    "dividend_yield": "0.002104055411816294134025567634",
+    "monthly_passive_income": "66.66666666666666666666666667",
+    "total_pnl": "-11925.11377000000000000000000",
+    "annualized": null,
+    "valuation_note": "1 个持仓没有报价（BTC），已按成本计入总资产与年化，这部分盈亏未知；现金流不足或日期过于集中，暂无法计算年化",
+    "fx_warning": false,
+    "position_count": 3
+  },
+  "quotes": {
+    "results": [
+      {
+        "asset_id": 1,
+        "symbol": "600519",
+        "name": "贵州茅台",
+        "price": "1435.26000000",
+        "currency": "CNY",
+        "change_pct": "0.0123",
+        "fetched_at": "2026-11-15T10:59:00+08:00",
+        "source": "tencent",
+        "stale": false
+      },
+      {
+        "asset_id": 3,
+        "symbol": "BTC",
+        "name": "Bitcoin",
+        "price": null,
+        "stale": true,
+        "source": ""
+      },
+      {
+        "asset_id": 2,
+        "symbol": "AAPL",
+        "name": "Apple",
+        "price": "356.27",
+        "currency": "USD",
+        "change_pct": "-0.005",
+        "fetched_at": "2026-11-15T10:59:00+08:00",
+        "source": "tencent",
+        "stale": false
+      }
+    ]
+  },
+  "fx": {
+    "base": "USD",
+    "quote": "CNY",
+    "rate": "7.12",
+    "date": "2026-11-15",
+    "source": "frankfurter"
+  }
+}

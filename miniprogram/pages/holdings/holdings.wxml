@@ -1,0 +1,65 @@
+<view class="page">
+    <view class="hero">
+        <text class="hero-label">TOTAL ASSETS · {{baseCurrency}}</text>
+        <text class="hero-title">{{totalAssets}}</text>
+        <text class="hero-desc">市值 {{marketValue}} · 未定价成本按成本计</text>
+    </view>
+
+    <view class="notice" wx:if="{{valuationNote}}">{{valuationNote}}</view>
+    <view class="notice" wx:if="{{fxWarning}}">部分币种使用了兜底汇率，折算金额仅供参考。</view>
+
+    <view class="card">
+        <view class="card-title">收益概览</view>
+        <view class="metric-grid">
+            <view class="metric"><view class="metric-inner">
+                <text class="metric-label">浮动盈亏</text>
+                <text class="metric-value {{unrealizedTrend}}">{{unrealized}}</text>
+            </view></view>
+            <view class="metric"><view class="metric-inner">
+                <text class="metric-label">已实现盈亏</text>
+                <text class="metric-value {{realizedTrend}}">{{realized}}</text>
+            </view></view>
+            <view class="metric"><view class="metric-inner">
+                <text class="metric-label">累计股息</text>
+                <text class="metric-value">{{dividendTotal}}</text>
+            </view></view>
+            <view class="metric"><view class="metric-inner">
+                <text class="metric-label">XIRR 年化</text>
+                <text class="metric-value">{{annualized}}</text>
+            </view></view>
+        </view>
+        <view class="btn-row">
+            <button class="btn btn-ghost" bindtap="refreshQuotes" loading="{{refreshing}}">刷新行情</button>
+            <button class="btn btn-primary" bindtap="goRecord">记一笔</button>
+        </view>
+    </view>
+
+    <view class="card">
+        <view class="row-between">
+            <view class="card-title" style="margin-bottom:0">持仓明细（{{positions.length}}）</view>
+            <text class="small muted">点开看流水</text>
+        </view>
+    </view>
+
+    <view class="loading" wx:if="{{loading}}"><view class="spinner"></view>正在加载持仓…</view>
+    <view class="error-box" wx:elif="{{error}}">{{error}}</view>
+    <view class="empty" wx:elif="{{positions.length === 0}}">还没有持仓，去「记一笔」开始记录吧。</view>
+
+    <view class="list-item" wx:for="{{positions}}" wx:key="id" data-id="{{item.id}}" bindtap="openPosition">
+        <view class="row-between">
+            <view class="grow">
+                <view class="item-title">{{item.symbol}} <text class="small muted">{{item.name}}</text></view>
+                <view class="item-sub">{{item.accountName}} · {{item.marketLabel}} · {{item.quantity}} 股 @ {{item.avgCost}}</view>
+            </view>
+            <view>
+                <view class="item-value {{item.pnlTrend}}">{{item.marketValue}}</view>
+                <view class="item-value-sub {{item.pnlTrend}}">{{item.pnl}}</view>
+            </view>
+        </view>
+        <view class="divider"></view>
+        <view class="row-between">
+            <text class="small muted">近一年股息 {{item.dividend}} · 股息率 {{item.yield}}</text>
+            <text class="small muted">现价 {{item.lastPrice}}</text>
+        </view>
+    </view>
+</view>

@@ -26,3 +26,8 @@ local.properties
 .DS_Store
 smoke.log
 *.log
+
+# 小程序开发期临时抓包（不入库，也不随包发布）
+miniprogram/.workbuddy/probe.txt
+miniprogram/.workbuddy/probes/
+miniprogram/.workbuddy/mksamples2.py

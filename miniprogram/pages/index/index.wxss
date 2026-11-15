@@ -1,0 +1,2 @@
+.hero { margin-top: 20rpx; }
+.segment-item { padding: 16rpx 0; }

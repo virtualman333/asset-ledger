@@ -1,0 +1,42 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/holdings/holdings",
+    "pages/record/record",
+    "pages/inbox/inbox",
+    "pages/stats/stats",
+    "pages/me/me",
+    "pages/records/records",
+    "pages/accounts/accounts",
+    "pages/assets/assets",
+    "pages/dividends/dividends",
+    "pages/calendar/calendar",
+    "pages/quotes/quotes",
+    "pages/import/import",
+    "pages/draft-edit/draft-edit"
+  ],
+  "window": {
+    "navigationBarTitleText": "股息账本",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f6f7fb",
+    "backgroundTextStyle": "dark",
+    "enablePullDownRefresh": false
+  },
+  "tabBar": {
+    "color": "#8a8f9c",
+    "selectedColor": "#7166f0",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      { "pagePath": "pages/holdings/holdings", "text": "持仓" },
+      { "pagePath": "pages/record/record", "text": "记一笔" },
+      { "pagePath": "pages/inbox/inbox", "text": "收件箱" },
+      { "pagePath": "pages/stats/stats", "text": "统计" },
+      { "pagePath": "pages/me/me", "text": "我的" }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

@@ -1,0 +1,86 @@
+<view class="page">
+    <view class="card">
+        <view class="card-title">记一笔</view>
+        <view class="segment">
+            <view class="segment-item {{side === item ? 'segment-active' : ''}}" wx:for="{{sides}}" wx:key="*this" data-index="{{index}}" bindtap="onSideIndexTap">{{sideLabels[index]}}</view>
+        </view>
+
+        <picker mode="selector" range="{{accountNames}}" value="{{accountIndex}}" bindchange="onAccountChange">
+            <view class="picker"><text>账户</text><view class="grow right">{{accountNames[accountIndex] || '请先创建账户'}} <text class="picker-arrow">›</text></view></view>
+        </picker>
+
+        <block wx:if="{{needAsset}}">
+            <label class="label">标的代码</label>
+            <input class="input" placeholder="如 600519 / AAPL / BTC" value="{{symbol}}" data-field="symbol" bindinput="onFieldInput" />
+            <label class="label">标的名称（可留空，自动建标的时用到）</label>
+            <input class="input" placeholder="如 贵州茅台" value="{{assetName}}" data-field="assetName" bindinput="onFieldInput" />
+            <view class="row">
+                <view class="grow">
+                    <label class="label">市场</label>
+                    <picker mode="selector" range="{{marketLabels}}" value="{{marketIndex}}" bindchange="onMarketChange">
+                        <view class="picker">{{marketLabels[marketIndex]}} <text class="picker-arrow">›</text></view>
+                    </picker>
+                </view>
+            </view>
+        </block>
+
+        <block wx:if="{{needDividend}}">
+            <label class="label">每股派息</label>
+            <input class="input" type="digit" placeholder="0.00" value="{{perShare}}" data-field="perShare" bindinput="onFieldInput" />
+            <label class="label">持股数</label>
+            <input class="input" type="digit" placeholder="0" value="{{shares}}" data-field="shares" bindinput="onFieldInput" />
+            <label class="label">到手净额（留空按税前-税费计算）</label>
+            <input class="input" type="digit" placeholder="0.00" value="{{net}}" data-field="net" bindinput="onFieldInput" />
+        </block>
+
+        <block wx:if="{{needAmount}}">
+            <label class="label">金额</label>
+            <input class="input" type="digit" placeholder="0.00" value="{{amount}}" data-field="amount" bindinput="onFieldInput" />
+        </block>
+
+        <block wx:if="{{!needAsset && !needAmount}}">
+            <label class="label">数量</label>
+            <input class="input" type="digit" placeholder="0" value="{{quantity}}" data-field="quantity" bindinput="onFieldInput" />
+            <label class="label">单价</label>
+            <input class="input" type="digit" placeholder="0.00" value="{{price}}" data-field="price" bindinput="onFieldInput" />
+        </block>
+
+        <label class="label">手续费</label>
+        <input class="input" type="digit" value="{{fee}}" data-field="fee" bindinput="onFieldInput" />
+        <label class="label">税费</label>
+        <input class="input" type="digit" value="{{tax}}" data-field="tax" bindinput="onFieldInput" />
+
+        <picker mode="selector" range="{{currencies}}" value="{{currencyIndex}}" bindchange="onCurrencyChange">
+            <view class="picker"><text>币种</text><view class="grow right">{{currencies[currencyIndex]}} <text class="picker-arrow">›</text></view></view>
+        </picker>
+
+        <view class="row">
+            <view class="grow">
+                <label class="label">日期</label>
+                <picker mode="date" value="{{tradedDate}}" bindchange="onDateChange">
+                    <view class="picker">{{tradedDate}} <text class="picker-arrow">›</text></view>
+                </picker>
+            </view>
+            <view class="grow">
+                <label class="label">时间</label>
+                <picker mode="time" value="{{tradedTime}}" bindchange="onTimeChange">
+                    <view class="picker">{{tradedTime}} <text class="picker-arrow">›</text></view>
+                </picker>
+            </view>
+        </view>
+
+        <label class="label">备注</label>
+        <input class="input" placeholder="可选" value="{{note}}" data-field="note" bindinput="onFieldInput" />
+
+        <view class="notice" wx:if="{{preview}}">{{preview}}</view>
+        <view class="inline-error" wx:if="{{error}}">{{error}}</view>
+        <view class="form-actions">
+            <button class="btn btn-primary btn-block" loading="{{loading}}" bindtap="submit">确认入账</button>
+        </view>
+    </view>
+
+    <view class="card">
+        <view class="card-title">口径说明</view>
+        <text class="small muted">买入现金变动 = −(数量×单价 + 手续费 + 税费)；卖出 = 数量×单价 − 手续费 − 税费。入金 / 出金必须显式填金额。标的不存在时按「市场+代码」自动创建并复用。</text>
+    </view>
+</view>

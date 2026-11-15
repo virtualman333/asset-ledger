@@ -1,0 +1,47 @@
+<view class="page">
+    <view class="hero">
+        <text class="hero-label">ASSET LEDGER · 微信端</text>
+        <text class="hero-title">{{appName}}</text>
+        <text class="hero-desc">{{tagline}}</text>
+    </view>
+
+    <view class="card">
+        <view class="segment">
+            <view class="segment-item {{mode === 'login' ? 'segment-active' : ''}}" data-mode="login" bindtap="toggleMode" wx:if="{{mode === 'register'}}">登录</view>
+            <view class="segment-item {{mode === 'login' ? 'segment-active' : ''}}" wx:else>登录</view>
+            <view class="segment-item {{mode === 'register' ? 'segment-active' : ''}}" data-mode="register" bindtap="toggleMode" wx:if="{{mode === 'login'}}">注册</view>
+            <view class="segment-item {{mode === 'register' ? 'segment-active' : ''}}" wx:else>注册</view>
+        </view>
+
+        <label class="label">账号</label>
+        <input class="input" placeholder="用户名" value="{{username}}" data-field="username" bindinput="onFieldInput" />
+        <label class="label">密码</label>
+        <input class="input" placeholder="至少 8 位" password="{{true}}" value="{{password}}" data-field="password" bindinput="onFieldInput" />
+        <block wx:if="{{mode === 'register'}}">
+            <label class="label">邮箱（可选）</label>
+            <input class="input" placeholder="用于找回账号" value="{{email}}" data-field="email" bindinput="onFieldInput" />
+        </block>
+
+        <view class="inline-error" wx:if="{{error}}">{{error}}</view>
+
+        <view class="form-actions">
+            <button class="btn btn-primary btn-block" loading="{{loading}}" bindtap="submit">{{mode === 'login' ? '登录' : '注册并登录'}}</button>
+        </view>
+    </view>
+
+    <view class="card">
+        <view class="row-between" bindtap="toggleSettings">
+            <text class="medium">后端地址</text>
+            <text class="small muted">{{apiBase}} ›</text>
+        </view>
+        <block wx:if="{{showSettings}}">
+            <label class="label">Django 服务地址（需 HTTPS）</label>
+            <input class="input" value="{{apiBase}}" data-field="apiBase" bindinput="onFieldInput" placeholder="https://fiance.virtualman.top/api/v1" />
+            <view class="form-actions">
+                <button class="btn btn-ghost btn-block" bindtap="saveBase">保存地址</button>
+            </view>
+        </block>
+        <view class="divider"></view>
+        <text class="small muted">演示账号：demo / demo12345。数据保存在你自己的后端，凭证不会上传第三方。</text>
+    </view>
+</view>

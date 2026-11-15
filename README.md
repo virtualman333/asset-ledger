@@ -732,3 +732,44 @@ GET  /api/v1/analytics/dividends/export/           股息导出 CSV（与「累�
 - `/api/v1/health/` 的指纹在入哈希前把行尾统一成 LF，所以**「只改了行尾」不算改动** ——
   这是刻意的（同一个提交在 Windows 与 Linux 上必须是同一个指纹），代价是它答不了
   「行尾有没有被改坏」这类问题
+
+---
+
+## 微信小程序端「股息账本」
+
+`miniprogram/` 是 asset-ledger 的原生微信小程序客户端，名称 **股息账本**（备选：资产账本助手 / 息账本）。
+与鸿蒙端共用同一套 Django API，不另建第二份数据源；流水仍是唯一事实源。
+
+### 页面与能力
+
+| 页面 | 能力 |
+| --- | --- |
+| 登录 | 登录 / 注册、演示账号、可改后端地址（默认 `https://fiance.virtualman.top/api/v1`） |
+| 持仓 | 总资产、浮动 / 已实现盈亏、累计股息、XIRR、分行持仓、刷新行情 |
+| 记一笔 | 买入 / 卖出 / 股息 / 入金 / 出金，标的按「市场+代码」自动创建并复用，客户端幂等键 |
+| 收件箱 | 文本 / 截图识别，草稿箱，可改字段后确认入账（overrides），丢弃凭证保留 |
+| 统计 | 成本 / 市值 / 盈亏 / 股息率 / 月度被动收入、股息月度分布、日历、CSV 导出与导入 |
+| 我的 | 账户管理、标的库、流水 / 股息 / 日历、行情与汇率、CSV 导入、退出登录 |
+
+覆盖的后端接口见 `miniprogram/utils/api.js`，页面只从这一个网络入口请求；401 自动续期一次，
+token 黑名单表由 `rest_framework_simplejwt.token_blacklist` 提供。
+
+### 部署信息
+
+- 生产 API：`https://fiance.virtualman.top/api/v1`（HTTPS，证书有效期见服务器）
+- 服务：systemd `asset-ledger.service`，gunicorn `127.0.0.1:8011`，2 worker × 4 线程
+- 数据库：MySQL `asset_ledger`，端口 `3307`，密码只在服务器 `.env` 中
+- 微信公众平台需把 `https://fiance.virtualman.top` 配为 **request / uploadFile / downloadFile 合法域名**；
+  否则真机请求会被拦，模拟器「不校验合法域名」能过不代表能上线
+
+### 自测
+
+```bash
+cd server && python -m unittest discover -s apps -t .   # 599 项，无 Django 依赖
+# 线上部署后（在服务器上，PYTHONPATH 指向 server/）：
+python scripts/smoke_api.py --base https://fiance.virtualman.top
+python scripts/smoke_record_flow.py --base https://fiance.virtualman.top
+```
+
+小程序页面字段映射用真实响应做了契约测试（`miniprogram/.workbuddy/contract-test.js`），
+25 项覆盖持仓、统计、流水、股息、编辑回显、行情等；该目录不随小程序打包。

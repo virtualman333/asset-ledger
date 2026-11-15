@@ -1,0 +1,2 @@
+.hero { margin-top: 12rpx; }
+.metric-value { font-size: 30rpx; }

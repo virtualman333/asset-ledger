@@ -1,0 +1,44 @@
+<view class="page">
+    <view class="card">
+        <view class="card-title">标的库（全局共享）</view>
+        <input class="input" value="{{keyword}}" bindinput="onKeywordInput" placeholder="搜索代码或名称" />
+        <view class="form-actions"><button class="btn btn-ghost btn-block" bindtap="search">搜索</button></view>
+    </view>
+
+    <view class="loading" wx:if="{{loading}}"><view class="spinner"></view>加载中…</view>
+    <view class="error-box" wx:elif="{{error && !editing}}">{{error}}</view>
+    <view class="empty" wx:elif="{{assets.length === 0}}">没有匹配的标的。</view>
+    <view class="list-item" wx:for="{{assets}}" wx:key="id">
+        <view class="row-between">
+            <view class="grow">
+                <view class="item-title">{{item.symbol}} <text class="small muted">{{item.name}}</text></view>
+                <view class="item-sub">{{item.marketLabel}} · {{item.typeLabel}} · {{item.currency}}<text wx:if="{{item.dividend}}"> · {{item.dividend}}</text></view>
+            </view>
+            <view class="btn-row" style="width:auto">
+                <button class="btn btn-ghost" size="mini" data-id="{{item.id}}" bindtap="edit">编辑</button>
+                <button class="btn btn-danger" size="mini" data-id="{{item.id}}" bindtap="remove">删除</button>
+            </view>
+        </view>
+    </view>
+    <button class="btn btn-primary btn-block" bindtap="add">新增标的</button>
+
+    <view class="card" wx:if="{{editing}}" style="margin-top:24rpx">
+        <view class="card-title">{{form.id ? '编辑标的' : '新增标的'}}</view>
+        <label class="label">代码</label>
+        <input class="input" value="{{form.symbol}}" data-field="symbol" bindinput="onFieldInput" />
+        <label class="label">名称</label>
+        <input class="input" value="{{form.name}}" data-field="name" bindinput="onFieldInput" />
+        <picker mode="selector" range="{{marketLabels}}" value="{{marketIndex}}" bindchange="onMarketChange"><view class="picker"><text>市场</text><text>{{marketLabels[marketIndex]}} ›</text></view></picker>
+        <picker mode="selector" range="{{typeLabels}}" value="{{typeIndex}}" bindchange="onTypeChange"><view class="picker"><text>类型</text><text>{{typeLabels[typeIndex]}} ›</text></view></picker>
+        <picker mode="selector" range="{{currencies}}" value="{{currencyIndex}}" bindchange="onCurrencyChange"><view class="picker"><text>币种</text><text>{{currencies[currencyIndex]}} ›</text></view></picker>
+        <view class="row-between" style="margin-top:20rpx">
+            <text class="medium">股息标的</text>
+            <switch checked="{{form.is_dividend_asset}}" bindchange="onDividendToggle" color="#7166f0" />
+        </view>
+        <view class="inline-error" wx:if="{{error}}">{{error}}</view>
+        <view class="form-actions">
+            <button class="btn btn-ghost" bindtap="cancel">取消</button>
+            <button class="btn btn-primary" bindtap="save">保存</button>
+        </view>
+    </view>
+</view>
