@@ -1,0 +1,13 @@
+# 依赖
+node_modules/
+
+# 构建产物（发版时单独上传到服务器）
+dist/
+
+# 本地环境
+.env.local
+.env.*.local
+
+# 编辑器与系统
+.DS_Store
+*.log

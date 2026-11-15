@@ -139,6 +139,8 @@ django** —— 与 `tencent.py` 同一条理由：这些错只会表现为**静
 | 层 | 选型 |
 | --- | --- |
 | 客户端 | HarmonyOS NEXT（API 12+）ArkTS + ArkUI，relationalStore 缓存，品牌紫 `#7166F0` |
+| 小程序 | 原生微信小程序（WXML / WXSS / JS），「股息账本」，与鸿蒙端共用同一套 API |
+| Web | Vue 3 + TypeScript + Vite 6 + Element Plus + ECharts，history 路由，亮暗主题 |
 | 后端 | Django 5.2 + DRF + SimpleJWT，MySQL 8.4，APScheduler（进程内定时抓行情，见上） |
 | 行情 | 腾讯（A/港/美）、OKX（加密）、Yahoo（美股备用）、Frankfurter + ER-API（汇率） |
 | Agent | 多模态 LLM（OpenAI 兼容接口），无 Key 时降级为规则解析 |
@@ -146,10 +148,12 @@ django** —— 与 `tencent.py` 同一条理由：这些错只会表现为**静
 ## 目录结构
 
 ```
-harmony/   鸿蒙工程（DevEco Studio 打开这一层）
-server/    Django 后端
-docs/      方案设计与接口文档
-scripts/   工具脚本（入口：`scripts/run_checks.py`）
+harmony/     鸿蒙工程（DevEco Studio 打开这一层）
+miniprogram/ 微信小程序「股息账本」（微信开发者工具打开这一层）
+web/         Web 前端（Vue 3 + TS + Vite）
+server/      Django 后端
+docs/        方案设计与接口文档
+scripts/     工具脚本（入口：`scripts/run_checks.py`）
 ```
 
 ## 客户端页面
@@ -773,3 +777,53 @@ python scripts/smoke_record_flow.py --base https://fiance.virtualman.top
 
 小程序页面字段映射用真实响应做了契约测试（`miniprogram/.workbuddy/contract-test.js`），
 25 项覆盖持仓、统计、流水、股息、编辑回显、行情等；该目录不随小程序打包。
+
+## Web 端「股息账本」
+
+`web/` 是 asset-ledger 的浏览器客户端，与鸿蒙端、小程序端共用同一套 Django API，不另建数据源。
+技术栈 Vue 3 + TypeScript + Vite 6 + Element Plus + ECharts；金额以字符串原样展示，
+业务逻辑（成本、盈亏、股息、XIRR）一律由后端算好，前端不做二次计算。
+
+### 页面与能力
+
+| 路由 | 能力 |
+| --- | --- |
+| `/login` | 登录 / 注册、演示账号、可改后端地址（默认同源 `/api/v1`） |
+| `/holdings` | 总资产、浮动 / 已实现盈亏、累计股息、XIRR、持仓表、刷新行情 |
+| `/record` | 买入 / 卖出 / 股息 / 入金 / 出金，标的自动创建，客户端幂等键 |
+| `/inbox` | Agent 文本 / 截图识别草稿，改字段后确认入账（overrides），丢弃 |
+| `/stats` | 成本 / 市值 / 盈亏 / 股息率、股息月度柱状图、收益构成饼图、三类 CSV 导出 |
+| `/transactions` | 流水筛选、分页、删除、导出 |
+| `/accounts` `/assets` | 账户与标的 CRUD、搜索 |
+| `/dividends` `/calendar` | 股息明细 CRUD、股息日历 |
+| `/quotes` `/import` | 行情与汇率查询、CSV 导入与行级失败展示 |
+| `/draft/:id` `/settings` | 草稿核对确认、后端地址与主题设置 |
+
+所有请求只走 `web/src/api/client.ts` 一个网络入口：JWT Bearer、401 自动刷新一次并轮换 token、
+刷新失败跳 `/login`；分页信封只在 `rows()` 里拆一次。字段结构镜像在 `web/src/api/types.ts`，
+展示格式化在 `web/src/api/format.ts`（红涨绿跌、品牌紫 `#7166F0`）。
+
+### 开发与构建
+
+```bash
+cd web
+npm install
+npm run dev          # 本地开发，/api 代理到 https://fiance.virtualman.top
+npm run typecheck    # vue-tsc --noEmit
+npm run build        # 类型检查 + 生产构建，产物在 web/dist/
+```
+
+VITE_API_BASE 留空时走同源 `/api/v1`；`web/.env.example` 是模板，按需复制为 `.env.local`。
+
+### 部署信息
+
+- 生产地址：`https://fiance.virtualman.top/`（与 API 同域，免跨域）
+- 静态目录：`/www/wwwroot/fiance-web/`，nginx 把 `/api/` 反代到 `127.0.0.1:8011`
+- history 路由必须在 vhost 里回退到 `index.html`：`try_files $uri $uri/ /index.html =404;`
+  （少了这一条，刷新 `/holdings` 这类子路由会 404）
+- `/assets/` 带 30 天 immutable 缓存，gzip 已开启；`/` 走 no-cache，保证发版即时生效
+- 发版：`npm run build` 后把 `dist/index.html` 与 `dist/assets/` 覆盖到静态目录即可，
+  `.well-known/`（证书续期）不要动
+
+浏览器端实际验证：`/`、`/login`、`/holdings`、`/stats` 均返回 200，
+入口 JS 与分包正常加载，登录 → `/auth/me/` → `/analytics/summary/` 链路通过。
